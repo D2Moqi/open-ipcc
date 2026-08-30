@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: frontend_admin_vue3/shared_ui_core
+title: 共享 UI 组件与后台布局框架
+scope:
+    - yudao-ui-admin-vue3/src/components/
+    - yudao-ui-admin-vue3/src/layout/
+    - yudao-ui-admin-vue3/src/store/
+source_files: []
+depends_on: []
+related_to: []

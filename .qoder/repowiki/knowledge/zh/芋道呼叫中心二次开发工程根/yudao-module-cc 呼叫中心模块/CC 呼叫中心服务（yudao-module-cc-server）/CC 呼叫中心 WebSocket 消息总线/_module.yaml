@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/cc_server/websocket_message_bus
+title: CC 呼叫中心 WebSocket 消息总线
+scope:
+    - yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/websocket/
+source_files: []
+depends_on: []
+related_to: []

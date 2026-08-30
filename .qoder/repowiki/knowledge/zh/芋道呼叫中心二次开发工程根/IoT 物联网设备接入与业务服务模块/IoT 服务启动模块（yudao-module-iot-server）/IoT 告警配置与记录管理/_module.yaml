@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: module_iot/server/alert_domain
+title: IoT 告警配置与记录管理
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/service/alert/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/controller/admin/alert/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/dal/dataobject/alert/
+source_files: []
+depends_on: []
+related_to: []

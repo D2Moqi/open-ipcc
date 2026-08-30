@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: frontend_refs
+title: 前端多端 UI 仓库索引
+scope:
+    - yudao-cloud/yudao-ui/
+source_files: []
+depends_on: []
+related_to: []

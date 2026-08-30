@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: module_mall/product
+title: 商品模块（SPU/SKU/分类/品牌/评论/收藏/属性）
+scope:
+    - yudao-cloud/yudao-module-mall/yudao-module-product-api/
+    - yudao-cloud/yudao-module-mall/yudao-module-product-server/
+source_files: []
+depends_on: []
+related_to: []

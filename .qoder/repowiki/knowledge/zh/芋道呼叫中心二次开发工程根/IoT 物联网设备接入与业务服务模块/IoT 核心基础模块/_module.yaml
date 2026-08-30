@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_iot/core
+title: IoT 核心基础模块
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-core/
+source_files: []
+depends_on: []
+related_to: []

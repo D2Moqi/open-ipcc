@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_iot/gateway/http_protocol
+title: IoT HTTP 协议接入实现
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/http/
+source_files: []
+depends_on: []
+related_to: []

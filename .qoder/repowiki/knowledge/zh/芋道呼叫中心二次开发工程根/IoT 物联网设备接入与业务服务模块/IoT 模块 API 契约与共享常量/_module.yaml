@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_iot/api
+title: IoT 模块 API 契约与共享常量
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-api/
+source_files: []
+depends_on: []
+related_to: []

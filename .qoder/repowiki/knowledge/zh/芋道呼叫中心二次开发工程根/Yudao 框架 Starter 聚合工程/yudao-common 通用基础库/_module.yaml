@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: yudao_framework/common_core
+title: yudao-common 通用基础库
+scope:
+    - yudao-cloud/yudao-framework/yudao-common/
+source_files: []
+depends_on: []
+related_to: []

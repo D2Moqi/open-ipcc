@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/cc_api
+title: CC 模块 API 常量与枚举定义
+scope:
+    - yudao-cloud/yudao-module-cc/yudao-module-cc-api/
+source_files: []
+depends_on: []
+related_to: []

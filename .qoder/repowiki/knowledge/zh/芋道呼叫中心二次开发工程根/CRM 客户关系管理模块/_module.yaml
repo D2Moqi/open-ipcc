@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_crm
+title: CRM 客户关系管理模块
+scope:
+    - yudao-cloud/yudao-module-crm/
+source_files: []
+depends_on: []
+related_to: []

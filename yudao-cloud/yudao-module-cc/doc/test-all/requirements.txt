@@ -1,0 +1,17 @@
+# 呼叫中心端到端测试套件 Python 依赖清单
+# =============================================
+# 运行环境: 系统 python3.11(pyenv),无需创建 venv(以下依赖已实测齐全)。
+# 直接执行: python3 cc_e2e_test.py
+# 缺依赖时按需安装: pip3 install playwright pymysql redis requests colorama paramiko
+#
+# 说明:
+#   - esl_helper 为纯 socket 实现,不依赖任何 ESL 库(故移除旧的 ESL==0.1.0);
+#   - pjsua 软电话依赖 brew install pjproject(系统级二进制),与 pip 无关;
+#   - chromium 内核位于 ~/Library/Caches/ms-playwright(全局共享),无需单独下载。
+
+playwright>=1.42
+pymysql
+redis
+requests
+colorama
+paramiko

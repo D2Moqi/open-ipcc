@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_report
+title: 报表与数据可视化模块（GoView/积木报表）
+scope:
+    - yudao-cloud/yudao-module-report/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: frontend_admin_vue3/iot_cc
+title: IoT 物联网与 CC 呼叫中心管理前端
+scope:
+    - yudao-ui-admin-vue3/src/views/iot/
+    - yudao-ui-admin-vue3/src/api/iot/
+    - yudao-ui-admin-vue3/src/views/cc/
+source_files: []
+depends_on: []
+related_to: []

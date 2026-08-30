@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: ""
+title: 芋道呼叫中心二次开发工程根
+scope:
+    - README.md
+    - .gitignore
+    - .gitmodules
+    - agents.md
+    - .trae/
+source_files: []
+depends_on: []
+related_to: []

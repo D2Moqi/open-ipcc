@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_bpm
+title: BPM 业务流程管理模块
+scope:
+    - yudao-cloud/yudao-module-bpm/
+source_files: []
+depends_on: []
+related_to: []

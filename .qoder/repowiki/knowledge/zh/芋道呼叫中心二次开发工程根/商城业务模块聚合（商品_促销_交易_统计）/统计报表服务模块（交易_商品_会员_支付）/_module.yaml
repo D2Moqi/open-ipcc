@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: module_mall/statistics
+title: 统计报表服务模块（交易/商品/会员/支付）
+scope:
+    - yudao-cloud/yudao-module-mall/yudao-module-statistics-api/
+    - yudao-cloud/yudao-module-mall/yudao-module-statistics-server/
+source_files: []
+depends_on: []
+related_to: []

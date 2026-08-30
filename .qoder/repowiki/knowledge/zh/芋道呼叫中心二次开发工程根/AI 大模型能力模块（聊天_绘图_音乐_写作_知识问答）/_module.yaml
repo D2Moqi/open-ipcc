@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_ai
+title: AI 大模型能力模块（聊天/绘图/音乐/写作/知识问答）
+scope:
+    - yudao-cloud/yudao-module-ai/
+source_files: []
+depends_on: []
+related_to: []

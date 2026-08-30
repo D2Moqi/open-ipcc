@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: module_iot/server/shared_infrastructure
+title: IoT 模块共享基础设施（配置、定时任务与消息总线）
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/framework/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/job/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/mq/
+source_files: []
+depends_on: []
+related_to: []

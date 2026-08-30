@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/ipcc_sipproxy/api_extension_points
+title: SIP Proxy 扩展点 API
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/java/cn/ipcc/sipproxy/api/
+source_files: []
+depends_on: []
+related_to: []

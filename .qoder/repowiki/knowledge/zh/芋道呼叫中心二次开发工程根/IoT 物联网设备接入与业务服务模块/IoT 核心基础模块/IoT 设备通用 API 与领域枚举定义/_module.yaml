@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: module_iot/core/device_api
+title: IoT 设备通用 API 与领域枚举定义
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-core/src/main/java/cn/iocoder/yudao/module/iot/core/biz/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-core/src/main/java/cn/iocoder/yudao/module/iot/core/enums/
+source_files: []
+depends_on: []
+related_to: []

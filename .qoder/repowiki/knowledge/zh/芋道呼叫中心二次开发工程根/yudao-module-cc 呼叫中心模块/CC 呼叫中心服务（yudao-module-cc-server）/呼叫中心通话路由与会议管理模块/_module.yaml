@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: module_cc/cc_server/call_routing_conference
+title: 呼叫中心通话路由与会议管理模块
+scope:
+    - yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/
+    - yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/service/call/
+    - yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/dal/dataobject/call/
+source_files: []
+depends_on: []
+related_to: []

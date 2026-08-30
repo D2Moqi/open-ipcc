@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: module_iot/server/thingmodel_domain
+title: IoT 产品物模型领域服务
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/service/thingmodel/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/controller/admin/thingmodel/
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/src/main/java/cn/iocoder/yudao/module/iot/dal/dataobject/thingmodel/
+source_files: []
+depends_on: []
+related_to: []

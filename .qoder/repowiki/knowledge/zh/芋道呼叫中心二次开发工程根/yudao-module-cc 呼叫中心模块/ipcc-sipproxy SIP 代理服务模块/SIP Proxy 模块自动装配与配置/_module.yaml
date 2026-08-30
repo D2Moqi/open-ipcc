@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: module_cc/ipcc_sipproxy/autoconfigure
+title: SIP Proxy 模块自动装配与配置
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/java/cn/ipcc/sipproxy/autoconfigure/
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/resources/
+source_files: []
+depends_on: []
+related_to: []

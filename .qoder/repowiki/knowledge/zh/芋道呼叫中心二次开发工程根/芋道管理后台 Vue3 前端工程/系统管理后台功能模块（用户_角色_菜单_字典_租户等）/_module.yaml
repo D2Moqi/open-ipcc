@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: frontend_admin_vue3/system_management
+title: 系统管理后台功能模块（用户/角色/菜单/字典/租户等）
+scope:
+    - yudao-ui-admin-vue3/src/views/system/
+    - yudao-ui-admin-vue3/src/api/system/
+source_files: []
+depends_on: []
+related_to: []

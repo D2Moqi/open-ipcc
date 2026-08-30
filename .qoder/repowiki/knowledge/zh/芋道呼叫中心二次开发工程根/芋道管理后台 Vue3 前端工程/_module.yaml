@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: frontend_admin_vue3
+title: 芋道管理后台 Vue3 前端工程
+scope:
+    - yudao-ui-admin-vue3/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_wms
+title: WMS 仓库管理系统模块
+scope:
+    - yudao-cloud/yudao-module-wms/
+source_files: []
+depends_on: []
+related_to: []

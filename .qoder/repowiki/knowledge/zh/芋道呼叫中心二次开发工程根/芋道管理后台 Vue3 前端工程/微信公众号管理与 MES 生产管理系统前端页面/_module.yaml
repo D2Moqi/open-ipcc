@@ -1,0 +1,10 @@
+schema_version: 1
+module_path: frontend_admin_vue3/mp_mes_cc_report
+title: 微信公众号管理与 MES 生产管理系统前端页面
+scope:
+    - yudao-ui-admin-vue3/src/views/mp/
+    - yudao-ui-admin-vue3/src/api/mp/
+    - yudao-ui-admin-vue3/src/views/mes/
+source_files: []
+depends_on: []
+related_to: []

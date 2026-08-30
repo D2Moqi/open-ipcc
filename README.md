@@ -1,39 +1,28 @@
-# open-ipcc
+# yudao-cloud-cc
 
-#### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+# 介绍
 
-#### 软件架构
-软件架构说明
+基于yudao-cloud的呼叫中心系统
 
+# 开发工具
 
-#### 安装教程
+## git
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+拉去主git项目后 执行
 
-#### 使用说明
+cd yudao-cloud-cc
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+git submodule update --init --recursive 命令拉取git子模块，在使用idea打开文件夹
 
-#### 参与贡献
+**idea需要安装 Multi-Project Workspace 插件**
 
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+## idea
 
+idea需要安装 Multi-Project Workspace 插件 用于同时打开多类型项目，便于ai同时开发前后端代码
 
-#### 特技
+项目加载有问题 关闭idea，删除.idea文件夹中 除 jb-workspace.xml 的文件，重新打开
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+问题：出现项目名称展示有问题，核对git子项目（前后端项目代码）的git分支是否显示正确
+
+问题：出现前端项目npm命令不识别或者无法运行，查看 package.json 文件是否正确识别，未正确识别需在idea中右键设置识别/匹配的文件格式为json
+

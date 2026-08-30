@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/ipcc_fs_esl
+title: FreeSWITCH ESL 客户端组件
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-fs-esl/
+source_files: []
+depends_on: []
+related_to: []

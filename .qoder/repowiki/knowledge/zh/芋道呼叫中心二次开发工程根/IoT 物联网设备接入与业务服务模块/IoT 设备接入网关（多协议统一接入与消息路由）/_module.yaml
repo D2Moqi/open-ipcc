@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_iot/gateway
+title: IoT 设备接入网关（多协议统一接入与消息路由）
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-gateway/
+source_files: []
+depends_on: []
+related_to: []

@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/cc_server
+title: CC 呼叫中心服务（yudao-module-cc-server）
+scope:
+    - yudao-cloud/yudao-module-cc/yudao-module-cc-server/
+source_files: []
+depends_on: []
+related_to: []

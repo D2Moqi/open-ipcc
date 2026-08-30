@@ -1,0 +1,350 @@
+server:
+  port: 48080
+
+--- #################### 数据库相关配置 ####################
+spring:
+  autoconfigure:
+    # noinspection SpringBootApplicationYaml
+    exclude:
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeMultimodalEmbeddingAutoConfiguration # spring-ai-alibaba 2.0.0-M1.1 imports 注册但 jar 缺失（上游缺陷）
+      - org.springframework.ai.vectorstore.redis.autoconfigure.RedisVectorStoreAutoConfiguration # 向量库由 yudao 动态创建，排除自动配置避免 EmbeddingModel 注入歧义
+      - org.springframework.ai.vectorstore.qdrant.autoconfigure.QdrantVectorStoreAutoConfiguration # 禁用 AI 模块的 Qdrant，手动创建
+      - org.springframework.ai.vectorstore.milvus.autoconfigure.MilvusVectorStoreAutoConfiguration # 禁用 AI 模块的 Milvus，手动创建
+  # 数据源配置项
+  datasource:
+    druid: # Druid 【监控】相关的全局配置
+      web-stat-filter:
+        enabled: true
+      stat-view-servlet:
+        enabled: true
+        allow: # 设置白名单，不填则允许所有访问
+        url-pattern: /druid/*
+        login-username: # 控制台管理用户名和密码
+        login-password:
+      filter:
+        stat:
+          enabled: true
+          log-slow-sql: true # 慢 SQL 记录
+          slow-sql-millis: 100
+          merge-sql: true
+        wall:
+          config:
+            multi-statement-allow: true
+    dynamic: # 多数据源配置
+      druid: # Druid 【连接池】相关的全局配置
+        initial-size: 1 # 初始连接数
+        min-idle: 1 # 最小连接池数量
+        max-active: 20 # 最大连接池数量
+        max-wait: 60000 # 配置获取连接等待超时的时间，单位：毫秒（1 分钟）
+        time-between-eviction-runs-millis: 60000 # 配置间隔多久才进行一次检测，检测需要关闭的空闲连接，单位：毫秒（1 分钟）
+        min-evictable-idle-time-millis: 600000 # 配置一个连接在池中最小生存的时间，单位：毫秒（10 分钟）
+        max-evictable-idle-time-millis: 1800000 # 配置一个连接在池中最大生存的时间，单位：毫秒（30 分钟）
+        validation-query: SELECT 1 FROM DUAL # 配置检测连接是否有效
+        test-while-idle: true
+        test-on-borrow: false
+        test-on-return: false
+        pool-prepared-statements: true # 是否开启 PreparedStatement 缓存
+        max-pool-prepared-statement-per-connection-size: 20 # 每个连接缓存的 PreparedStatement 数量
+      primary: master
+      datasource:
+        master:
+          url: jdbc:mysql://mysql6.sqlpub.com:3311/yudao_cc?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          #          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=true&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true # MySQL Connector/J 5.X 连接的示例
+          #          url: jdbc:postgresql://127.0.0.1:5432/ruoyi-vue-pro # PostgreSQL 连接的示例
+          #          url: jdbc:oracle:thin:@127.0.0.1:1521:xe # Oracle 连接的示例
+          #          url: jdbc:sqlserver://127.0.0.1:1433;DatabaseName=ruoyi-vue-pro;SelectMethod=cursor;encrypt=false;rewriteBatchedStatements=true;useUnicode=true;characterEncoding=utf-8 # SQLServer 连接的示例
+          #          url: jdbc:dm://127.0.0.1:5236?schema=RUOYI_VUE_PRO # DM 连接的示例
+          #          url: jdbc:kingbase8://127.0.0.1:54321/test  # 人大金仓 KingbaseES 连接的示例
+          #          url: jdbc:postgresql://127.0.0.1:5432/postgres # OpenGauss 连接的示例
+          username: yudaocc
+          password: JOg7SjhZVMbONFg6
+          #          username: sa # SQL Server 连接的示例
+          #          password: Yudao@2024 # SQL Server 连接的示例
+          #          username: SYSDBA # DM 连接的示例
+          #          password: SYSDBA001 # DM 连接的示例
+          #          username: root # OpenGauss 连接的示例
+          #          password: Yudao@2024 # OpenGauss 连接的示例
+          #          username: root # 瀚高 HighGo 连接的示例
+          #          password: 123456 # 瀚高 HighGo 连接的示例
+        slave: # 模拟从库，可根据自己需要修改
+          lazy: true # 开启懒加载，保证启动速度
+          url: jdbc:mysql://mysql6.sqlpub.com:3311/yudao_cc?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
+          username: yudaocc
+          password: JOg7SjhZVMbONFg6
+  #        tdengine: # IoT 数据库（需要 IoT 物联网再开启噢！）
+  #          url: jdbc:TAOS-RS://127.0.0.1:6041/ruoyi_vue_pro
+  #          driver-class-name: com.taosdata.jdbc.rs.RestfulDriver
+  #          username: root
+  #          password: taosdata
+  #          druid:
+  #            validation-query: SELECT SERVER_STATUS() # TDengine 数据源的有效性检查 SQL
+
+  # Redis 配置。Redisson 默认的配置足够使用，一般不需要进行调优
+  data:
+    redis:
+      host: 39.107.224.184 # 地址
+      port: 6379 # 端口
+      database: 0 # 数据库索引
+      password: Moqi147852369 # 密码，建议生产环境开启
+
+--- #################### 定时任务相关配置 ####################
+
+xxl:
+  job:
+    enabled: false # 是否开启调度中心，默认为 true 开启
+    admin:
+      addresses: http://127.0.0.1:9090/xxl-job-admin # 调度中心部署跟地址
+
+--- #################### 消息队列相关 ####################
+
+# rocketmq 配置项，对应 RocketMQProperties 配置类
+rocketmq:
+  name-server: 127.0.0.1:9876 # RocketMQ Namesrv
+
+spring:
+  # RabbitMQ 配置项，对应 RabbitProperties 配置类
+  rabbitmq:
+    host: 127.0.0.1 # RabbitMQ 服务的地址
+    port: 5672 # RabbitMQ 服务的端口
+    username: rabbit # RabbitMQ 服务的账号
+    password: rabbit # RabbitMQ 服务的密码
+  # Kafka 配置项，对应 KafkaProperties 配置类
+  kafka:
+    bootstrap-servers: 127.0.0.1:9092 # 指定 Kafka Broker 地址，可以设置多个，以逗号分隔
+
+--- #################### 服务保障相关配置 ####################
+
+# Lock4j 配置项
+lock4j:
+  acquire-timeout: 3000 # 获取分布式锁超时时间，默认为 3000 毫秒
+  expire: 30000 # 分布式锁的超时时间，默认为 30000 毫秒
+
+--- #################### 监控相关配置 ####################
+
+# Actuator 监控端点的配置项
+management:
+  endpoints:
+    web:
+      base-path: /actuator # Actuator 提供的 API 接口的根目录。默认为 /actuator
+      exposure:
+        include: '*' # 需要开放的端点。默认值只打开 health 和 info 两个端点。通过设置 * ，可以开放所有端点。
+
+# Spring Boot Admin 配置项
+spring:
+  boot:
+    admin:
+      # Spring Boot Admin Client 客户端的相关配置
+      client:
+        url: http://127.0.0.1:${server.port}/${spring.boot.admin.context-path} # 设置 Spring Boot Admin Server 地址
+        instance:
+          service-host-type: IP # 注册实例时，优先使用 IP [IP, HOST_NAME, CANONICAL_HOST_NAME]
+        username: admin
+        password: admin
+      # Spring Boot Admin Server 服务端的相关配置
+      context-path: /admin # 配置 Spring
+
+# 日志文件配置
+logging:
+  file:
+    name: ./logs/${spring.application.name}.log # 日志文件名，全路径
+  level:
+    # 配置自己写的 MyBatis Mapper 打印日志
+    cn.iocoder.yudao.module.bpm.dal.mysql: debug
+    cn.iocoder.yudao.module.infra.dal.mysql: debug
+    cn.iocoder.yudao.module.infra.dal.mysql.logger.ApiErrorLogMapper: INFO # 配置 ApiErrorLogMapper 的日志级别为 info，避免和 GlobalExceptionHandler 重复打印
+    cn.iocoder.yudao.module.infra.dal.mysql.job.JobLogMapper: INFO # 配置 JobLogMapper 的日志级别为 info
+    cn.iocoder.yudao.module.infra.dal.mysql.file.FileConfigMapper: INFO # 配置 FileConfigMapper 的日志级别为 info
+    cn.iocoder.yudao.module.pay.dal.mysql: debug
+    cn.iocoder.yudao.module.pay.dal.mysql.notify.PayNotifyTaskMapper: INFO # 配置 PayNotifyTaskMapper 的日志级别为 info
+    cn.iocoder.yudao.module.system.dal.mysql: debug
+    cn.iocoder.yudao.module.system.dal.mysql.sms.SmsChannelMapper: INFO # 配置 SmsChannelMapper 的日志级别为 info
+    cn.iocoder.yudao.module.tool.dal.mysql: debug
+    cn.iocoder.yudao.module.member.dal.mysql: debug
+    cn.iocoder.yudao.module.trade.dal.mysql: debug
+    cn.iocoder.yudao.module.promotion.dal.mysql: debug
+    cn.iocoder.yudao.module.statistics.dal.mysql: debug
+    cn.iocoder.yudao.module.crm.dal.mysql: debug
+    cn.iocoder.yudao.module.erp.dal.mysql: debug
+    cn.iocoder.yudao.module.iot.dal.mysql: debug
+    cn.iocoder.yudao.module.iot.dal.tdengine: DEBUG
+    cn.iocoder.yudao.module.ai.dal.mysql: debug
+    cn.iocoder.yudao.module.cc: debug
+    #    cn.iocoder.yudao.module.cc.dal.mysql: debug
+    org.springframework.context.support.PostProcessorRegistrationDelegate: ERROR # TODO 芋艿：先禁用，Spring Boot 3.X 存在部分错误的 WARN 提示
+
+debug: false
+
+--- #################### 微信公众号、小程序相关配置 ####################
+wx:
+  mp: # 公众号配置（必填），参见 https://github.com/Wechat-Group/WxJava/blob/develop/spring-boot-starters/wx-java-mp-spring-boot-starter/README.md 文档
+    #    app-id: wx041349c6f39b268b # 测试号（牛希尧提供的）
+    #    secret: 5abee519483bc9f8cb37ce280e814bd0
+    app-id: wx5b23ba7a5589ecbb # 测试号（自己的）
+    secret: 2a7b3b20c537e52e74afd395eb85f61f
+    #    app-id: wxa69ab825b163be19 # 测试号（Kongdy 提供的）
+    #    secret: bd4f9fab889591b62aeac0d7b8d8b4a0
+    # 存储配置，解决 AccessToken 的跨节点的共享
+    config-storage:
+      type: RedisTemplate # 采用 RedisTemplate 操作 Redis，会自动从 Spring 中获取
+      key-prefix: wx # Redis Key 的前缀
+      http-client-type: HttpComponents # 采用 HttpComponents（HttpClient 5）请求微信公众号平台
+  miniapp: # 小程序配置（必填），参见 https://github.com/Wechat-Group/WxJava/blob/develop/spring-boot-starters/wx-java-miniapp-spring-boot-starter/README.md 文档
+    #    appid: wx62056c0d5e8db250 # 测试号（牛希尧提供的）
+    #    secret: 333ae72f41552af1e998fe1f54e1584a
+    #    appid: wx63c280fe3248a3e7 # wenhualian的接口测试号
+    #    secret: 6f270509224a7ae1296bbf1c8cb97aed
+    appid: wxc4598c446f8a9cb3 # 测试号（Kongdy 提供的）
+    secret: 4a1a04e07f6a4a0751b39c3064a92c8b
+    #    appid: wx66186af0759f47c9 # 测试号（puhui 提供的）
+    #    secret: 3218bcbd112cbc614c7264ceb20144ac
+    config-storage:
+      type: RedisTemplate # 采用 RedisTemplate 操作 Redis，会自动从 Spring 中获取
+      key-prefix: wa # Redis Key 的前缀
+      http-client-type: HttpComponents # 采用 HttpComponents（HttpClient 5）请求微信小程序平台
+
+--- #################### 芋道相关配置 ####################
+
+# 芋道配置项，设置当前项目所有自定义的配置
+yudao:
+  captcha:
+    enable: false # 本地环境，暂时关闭图片验证码，方便登录等接口的测试；
+  security:
+    mock-enable: true
+  pay:
+    order-notify-url: http://yunai.natapp1.cc/admin-api/pay/notify/order # 支付渠道的【支付】回调地址
+    refund-notify-url: http://yunai.natapp1.cc/admin-api/pay/notify/refund # 支付渠道的【退款】回调地址
+    transfer-notify-url: http://yunai.natapp1.cc/admin-api/pay/notify/transfer # 支付渠道的【转账】回调地址
+  access-log: # 访问日志的配置项
+    enable: false
+  demo: false # 关闭演示模式
+  wxa-code:
+    env-version: develop # 小程序版本: 正式版为 "release"；体验版为 "trial"；开发版为 "develop"
+  wxa-subscribe-message:
+    miniprogram-state: developer # 跳转小程序类型：开发版为 “developer”；体验版为 “trial”为；正式版为 “formal”
+  tencent-lbs-key: TVDBZ-TDILD-4ON4B-PFDZA-RNLKH-VVF6E # QQ 地图的密钥 https://lbs.qq.com/service/staticV2/staticGuide/staticDoc
+
+justauth:
+  enabled: true
+  type:
+    DINGTALK: # 钉钉
+      client-id: dingvrnreaje3yqvzhxg
+      client-secret: i8E6iZyDvZj51JIb0tYsYfVQYOks9Cq1lgryEjFRqC79P3iJcrxEwT6Qk2QvLrLI
+      ignore-check-redirect-uri: true
+    WECHAT_ENTERPRISE: # 企业微信
+      client-id: wwd411c69a39ad2e54
+      client-secret: 1wTb7hYxnpT2TUbIeHGXGo7T0odav1ic10mLdyyATOw
+      agent-id: 1000004
+      ignore-check-redirect-uri: true
+    # noinspection SpringBootApplicationYaml
+    WECHAT_MINI_PROGRAM: # 微信小程序
+      client-id: ${wx.miniapp.appid}
+      client-secret: ${wx.miniapp.secret}
+      ignore-check-redirect-uri: true
+      ignore-check-state: true # 微信小程序，不会使用到 state，所以不进行校验
+    WECHAT_MP: # 微信公众号
+      client-id: ${wx.mp.app-id}
+      client-secret: ${wx.mp.secret}
+      ignore-check-redirect-uri: true
+    ALIPAY: # 支付宝小程序
+      client-id: xx
+      client-secret: xx
+      alipay-public-key: xx
+      ignore-check-redirect-uri: true
+      ignore-check-state: true
+  cache:
+    type: REDIS
+    prefix: 'social_auth_state:' # 缓存前缀，目前只对 Redis 缓存生效，默认 JUSTAUTH::STATE::
+    timeout: 24h # 超时时长，目前只对 Redis 缓存生效，默认 3 分钟
+
+--- #################### iot相关配置 TODO 芋艿【IOT】：再瞅瞅 ####################
+pf4j:
+  #  pluginsDir: /tmp/
+  pluginsDir: ../plugins
+
+
+
+--- #################### cc相关配置 ####################
+cc:
+  freeswitch:
+    fsRecordFile: /data/record  # freeswitch录音文件地址
+    fsRecordFileSuffix: .wav # freeswitch录音文件文件后缀
+    codec: '^^:G722:PCMU:PCMA' # 音频编码
+    sampleRate: 8000 # 采样率
+  websocket:
+    path: /cc/ws # 路径
+    sender-type: local # 消息发送的类型，可选值为 local、redis、rocketmq、kafka、rabbitmq
+    sender-rocketmq:
+      topic: ${spring.application.name}-cc-websocket # 消息发送的 RocketMQ Topic
+      consumer-group: ${spring.application.name}-cc-websocket-consumer # 消息发送的 RocketMQ Consumer Group
+    sender-rabbitmq:
+      exchange: ${spring.application.name}-cc-websocket-exchange # 消息发送的 RabbitMQ Exchange
+      queue: ${spring.application.name}-cc-websocket-queue # 消息发送的 RabbitMQ Queue
+  audio-fork:
+    auth-key: ipcc-audio-fork-2026 # mod_audio_fork 连接预共享密钥
+    mix-type: mono # fork 混音类型(mono=仅主叫音频/mixed=双方混合/stereo=双声道)
+    sample-rate: 16k # fork 音频采样率(8k=8000Hz/16k=16000Hz)
+    ws-url: ${CC_WS_URL:ws://127.0.0.1:48080}${cc.websocket.path} # CC 服务 WebSocket 地址(FS mod_audio_fork 连接用; 默认值仅单机部署有效: FS 与 cc-server 同机 host 网络用 127.0.0.1 直连, 避开 cc.wenmoqi.top DNS 误解析到 39.107.224.184 + 证书缺 SAN 问题; 集群部署需通过环境变量 CC_WS_URL 指定 cc-server 可达地址, 如 ws://62.234.191.165:48080)
+
+--- #################### ipcc-fs-esl 自研 ESL 客户端配置 ####################
+ipcc:
+  fs:
+    esl:
+      # ---------- 连接配置 ----------
+      connect-timeout-seconds: 5           # 连接超时（秒），默认 5
+      command-timeout-seconds: 10          # 同步命令超时（秒），默认 10
+      # ---------- 协议层配置 ----------
+      max-frame-size: 1048576              # 最大帧大小（字节），默认 1MB
+      max-header-lines: 256                # 最大头部行数，默认 256
+      netty-worker-threads: 4              # Netty worker 线程数，默认 4
+      # ---------- 自动重连配置 ----------
+      max-reconnect-attempts: 0            # 最大重连次数，0=无限重连，默认 0
+      reconnect-base-delay-seconds: 1      # 重连基础延迟（秒），默认 1
+      reconnect-max-delay-seconds: 60      # 重连最大延迟（秒），默认 60
+      # ---------- 健康检查配置 ----------
+      health-check-interval-seconds: 30    # 健康检查间隔（秒），默认 30
+      health-check-failure-threshold: 3    # 健康检查失败阈值（次），默认 3
+      # ---------- 事件执行器配置 ----------
+      event-executor-mode: CHANNEL_HASH    # 事件执行器模式：CHANNEL_HASH / SINGLE_THREAD / FIXED_THREAD_POOL
+      event-thread-pool-size: 64           # 事件线程池大小（CHANNEL_HASH 模式下为哈希桶数量），对应旧 cc.freeswitch.threadNum
+      event-queue-capacity: 10000          # 事件队列容量，对应旧 cc.freeswitch.queueCapacity
+      event-rejected-policy: CALLER_RUNS   # 事件拒绝策略：CALLER_RUNS / ABORT / DISCARD
+      # ---------- 分布式协调配置 ----------
+      monitor-enabled: true                # 是否启用监听权协调，对应旧 cc.freeswitch.monitoringStrategy；true=group策略，false=none策略
+      monitor-group: all                   # 监听组标识，对应旧 cc.freeswitch.group；"all" 表示监听所有 FS
+      monitor-compete-interval-seconds: 10  # 监听权竞争间隔（秒），默认 10
+      monitor-lock-expire-seconds: 30       # 监听锁过期时间（秒），默认 30
+      monitor-heartbeat-interval-seconds: 10 # 心跳更新间隔（秒），默认 10
+
+--- #################### sipproxy 模块配置（ipcc-sipproxy Starter） ####################
+sipproxy:
+  enabled: true # 是否启用 sipproxy（false 时自动配置不生效）
+  instance-id: ${HOSTNAME:node1} # 实例 ID，用于集群广播与日志追踪，多实例部署时通过 HOSTNAME 环境变量区分
+  sip:
+    port: 5561 # SIP 栈 UDP/TCP 监听端口（与 cc.sip.port 保持一致）
+    bind-address: 0.0.0.0 # SIP 栈绑定地址（0.0.0.0 监听所有网卡）
+    public-ip: 62.234.191.165 # SIP 代理公网 IP（用于 Contact/Via 头改写，使外部能回信到此节点）
+    # 必须填本机真实公网 IP: 域名 cc.wenmoqi.top 在服务器侧/公网 DNS 均解析为
+    # 39.107.224.184(数据库/Redis 主机), 并非本机。若此处填域名, FS originate 的第二段
+    # INVITE 会被发往 39.107.224.184:5561(该机无 sipproxy 监听, 端口关闭), 第二段 INVITE
+    # 永远到不了 sipproxy, 坐席B收不到来电、出局/IVR 呼叫均失败。故此处必须用本机
+    # 真实公网 IP, 让 FS 直连本机 sipproxy(同机 host 网络, 62.234.191.165:5561 监听于 0.0.0.0)。
+    # 外部 JsSIP 坐席经 WSS(cc.wenmoqi.top:443 反代)接入, sipproxy→坐席消息走既有 WS 连接, 不受此值影响;
+    # 第三方原生 SIP 终端(如 pjsua)直连 62.234.191.165:5561, 与此值一致, 回程 Contact 可达。
+    public-port: 5561 # SIP 代理公网端口（通常与 sip.port 一致）
+  websocket:
+    enabled: true # 是否启用 SIP over WebSocket
+    path: /sipproxy/ws # SIP WS endpoint 路径（与 /cc/ws 隔离）
+    require-auth: false # 握手是否强制 token 校验（false 跳过扩展点校验，仅用于本地调试；true 时由 CcWsHandshakeAuthenticator 校验）
+    auth-token-source: query # token 提取方式（query 从 URL 参数提取）
+    token-query-param: token # URL 参数名（前端通过 ?token=xxx 传递）
+  heartbeat:
+    options-enabled: true # 是否启用 OPTIONS 心跳响应（JsSIP 客户端会定时发送 OPTIONS 保活）
+    idle-timeout: 90 # 心跳超时（秒），超过此时间未收到任何 SIP 消息的 WS 连接视为僵尸连接
+    zombie-clean-enabled: true # 是否启用僵尸会话清理
+  cluster:
+    sender-type: local # 广播类型：local|redis|rocketmq|rabbitmq|kafka（local 单实例）
+    sender-redis-channel: 'ipcc:sipproxy:ws:broadcast' # Redis 广播 channel
+  session:
+    redis-key-prefix: 'ipcc:sipproxy:session:' # Redis Key 前缀（与代码常量对齐）
+    session-ttl: 120 # 会话 TTL（秒）
+    register-ttl: 3600 # 注册信息 TTL（秒）

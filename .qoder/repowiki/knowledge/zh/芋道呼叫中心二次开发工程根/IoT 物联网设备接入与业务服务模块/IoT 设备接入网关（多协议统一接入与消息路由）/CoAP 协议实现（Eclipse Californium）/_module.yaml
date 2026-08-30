@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_iot/gateway/coap_protocol
+title: CoAP 协议实现（Eclipse Californium）
+scope:
+    - yudao-cloud/yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/coap/
+source_files: []
+depends_on: []
+related_to: []

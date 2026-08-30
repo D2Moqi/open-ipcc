@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_erp
+title: ERP 企业资源管理模块
+scope:
+    - yudao-cloud/yudao-module-erp/
+source_files: []
+depends_on: []
+related_to: []

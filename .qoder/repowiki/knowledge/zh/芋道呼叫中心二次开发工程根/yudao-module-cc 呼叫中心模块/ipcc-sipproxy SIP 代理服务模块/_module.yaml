@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/ipcc_sipproxy
+title: ipcc-sipproxy SIP 代理服务模块
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/
+source_files: []
+depends_on: []
+related_to: []

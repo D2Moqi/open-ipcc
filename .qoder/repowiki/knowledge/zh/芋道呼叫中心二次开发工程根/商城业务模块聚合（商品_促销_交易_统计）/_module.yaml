@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_mall
+title: 商城业务模块聚合（商品/促销/交易/统计）
+scope:
+    - yudao-cloud/yudao-module-mall/
+source_files: []
+depends_on: []
+related_to: []

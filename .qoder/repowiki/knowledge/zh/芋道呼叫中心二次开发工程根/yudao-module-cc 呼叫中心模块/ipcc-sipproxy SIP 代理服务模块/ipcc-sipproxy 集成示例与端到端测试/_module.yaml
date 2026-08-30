@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/ipcc_sipproxy/examples
+title: ipcc-sipproxy 集成示例与端到端测试
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/example/
+source_files: []
+depends_on: []
+related_to: []

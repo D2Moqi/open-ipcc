@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: sql_scripts
+title: 多数据库 SQL 脚本与迁移工具集
+scope:
+    - yudao-cloud/sql/
+source_files: []
+depends_on: []
+related_to: []

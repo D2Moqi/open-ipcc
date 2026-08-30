@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: yudao_framework/messaging
+title: 消息队列 Starter（Redis/RabbitMQ/Kafka/RocketMQ）
+scope:
+    - yudao-cloud/yudao-framework/yudao-spring-boot-starter-mq/
+source_files: []
+depends_on: []
+related_to: []

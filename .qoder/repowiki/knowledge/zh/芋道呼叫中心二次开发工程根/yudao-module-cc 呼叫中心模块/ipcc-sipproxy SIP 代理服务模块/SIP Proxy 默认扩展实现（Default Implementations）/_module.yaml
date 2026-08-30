@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: module_cc/ipcc_sipproxy/defaults
+title: SIP Proxy 默认扩展实现（Default Implementations）
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/java/cn/ipcc/sipproxy/defaults/
+source_files: []
+depends_on: []
+related_to: []

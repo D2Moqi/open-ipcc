@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: module_cc/ipcc_sipproxy/cluster_transport
+title: SIP WebSocket 集群广播与会话管理
+scope:
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/java/cn/ipcc/sipproxy/cluster/
+    - yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/java/cn/ipcc/sipproxy/websocket/
+source_files: []
+depends_on: []
+related_to: []
