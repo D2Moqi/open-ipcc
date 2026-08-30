@@ -8,8 +8,8 @@ This file provides guidance to Lingma (lingma.aliyun.com) when working with code
 
 | 目录 | 说明 | 技术栈 |
 |---|---|---|
-| `yudao-cloud/` | 后端微服务（含自定义呼叫中心模块 `yudao-module-cc`） | Java 17 + Spring Boot 3.5 + Maven 多模块 |
-| `yudao-ui-admin-vue3/` | 管理后台前端 | Vue 3.5 + TypeScript + Vite 8 + Element Plus + pnpm |
+| `yudao-cloud/` | 后端微服务（含自定义呼叫中心模块 `yudao-module-cc`） | Java 25 + Spring Boot 4.1 + Spring Cloud 2025.1 + Maven 多模块 |
+| `yudao-ui-admin-vue3/` | 管理后台前端 | Vue 3.5 + TypeScript 6 + Vite 8 + Element Plus 2.13 + pnpm |
 | `yudao-prd/` | 产品需求文档静态站点（纯 HTML，无构建） | Vue 3 CDN + Element Plus |
 
 首次拉取需执行 `git submodule update --init --recursive`。子模块内已有更详细的 AGENTS.md，进入对应目录工作前先阅读：`yudao-prd/AGENTS.md`、`yudao-cloud/yudao-module-cc/ipcc-fs-esl/AGENTS.md`、`yudao-cloud/yudao-module-cc/ipcc-sipproxy/AGENTS.md`。
@@ -18,6 +18,8 @@ This file provides guidance to Lingma (lingma.aliyun.com) when working with code
 
 ### 后端（yudao-cloud）
 
+构建环境要求 **JDK 25**（根 pom `java.version=25`、revision `2026.07-jdk25-SNAPSHOT`；JDK 17 无法编译当前分支，旧环境线见 `master-jdk17-cc` 分支）。
+
 ```bash
 # 全量构建（按依赖顺序 api → fs-esl → sipproxy → server）
 cd yudao-cloud && mvn clean install -DskipTests
@@ -25,7 +27,7 @@ cd yudao-cloud && mvn clean install -DskipTests
 # 单模块编译（-am 连带依赖模块）
 mvn -pl yudao-module-cc/yudao-module-cc-server -am compile
 
-# 运行测试（JUnit 5 + Mockito，surefire 3.5）
+# 运行测试（JUnit 5 + Mockito，surefire 3.5.5）
 mvn test
 # 单个测试类（在目标模块目录下执行）
 cd yudao-module-cc/yudao-module-cc-server && mvn test -Dtest=FlowConditionEvaluatorTest
@@ -49,7 +51,8 @@ pnpm lint             # eslint + stylelint + prettier 检查
 
 ### 后端
 
-- `yudao-server` 是聚合启动容器（dev 环境端口 48080，`spring.profiles.active=dev`），业务模块以 Maven 依赖方式聚合。根 pom 当前仅启用 `system`、`infra`、`cc` 三个业务模块，其余（bpm/pay/mall/ai/iot 等）均已注释。
+- `yudao-server` 是聚合启动容器（dev 环境端口 48080，`spring.profiles.active=dev`），业务模块以 Maven 依赖方式聚合。根 pom 当前启用 `system`、`infra`、`ai`、`cc` 四个业务模块，其余（bpm/pay/mall/iot 等）均已注释；`ai` 模块基于 spring-ai 2.0.0 + spring-ai-alibaba 2.0.0-M1.1（DashScope）。
+- 关键依赖版本由 `yudao-dependencies` BOM 统一锁定：Spring Boot 4.1.0、Spring Cloud 2025.1.2、Spring Cloud Alibaba 2025.1.0.0、MyBatis Plus 3.5.16（`mybatis-plus-spring-boot4-starter`）、Redisson 4.6.1、Netty 4.2.15、Lombok 1.18.46、MapStruct 1.6.3、fastjson2 2.0.63。
 - **Nacos 注册发现与配置中心默认禁用**，配置以本地 YAML 为主：`application.yaml` 放默认值，`application-{env}.yaml` 做环境覆盖；敏感信息用 `${ENV_VAR:default}` 注入。跨服务环境标签（tag）由 `yudao-spring-boot-starter-env` 透传。
 - `yudao-module-cc` 是二次开发核心，含四个子模块：
   - `yudao-module-cc-api`：API 契约、常量与枚举
@@ -67,6 +70,7 @@ JsSIP 软电话（前端 `src/layout/components/SoftPhone/`）→ 浏览器 WebS
 
 ### 前端
 
+- 核心依赖版本：Vue 3.5.34、TypeScript 6.0.3、Element Plus 2.13.7、pinia 3.0.4、vue-router 5.0.6、axios 1.16.0、echarts 6.0.0、unocss 66.6.8、JsSIP 3.13.6；Node ≥ 20.19、pnpm ≥ 8.6。
 - 菜单为**动态路由**（菜单由后端权限接口下发），页面在 `src/views/`，API 封装在 `src/api/`；CC 相关页面集中在 `src/views/cc/` 与 `src/api/cc/`（ivr、sysagent、autocalltask、callrecord、sipproxygateway 等）。
 - 环境配置通过 `.env` + `.env.{mode}` 注入：`.env.local` 指向 `http://localhost:48080`；生产环境 `VITE_BASE_URL` 指向 `https://cc.wenmoqi.top`，WebSocket 走 `wss://cc.wenmoqi.top/cc/ws` 与 `/sipproxy/ws`（nginx WSS 代理）。只有 `VITE_` 前缀的变量会被 Vite 注入浏览器。
 
@@ -75,8 +79,9 @@ JsSIP 软电话（前端 `src/layout/components/SoftPhone/`）→ 浏览器 WebS
 - **软电话心跳**：sipproxy WebSocket 空闲超时 `sipproxy.heartbeat.idle-timeout=90s`，JsSIP 客户端 OPTIONS 心跳间隔必须小于该值（`SoftPhone.vue` 中 `KEEP_ALIVE_INTERVAL=30s`）。修改任一侧需联动验证，否则坐席注册后会被僵尸会话清理，导致来话失败。
 - **fs-esl 约束**：仅支持 Inbound 模式；事件订阅与命令必须异步（Netty IO 线程内阻塞 `.get()` 会死锁）；API 命令必须带 `api ` 前缀，bgapi 是平级独立命令。
 - **WebSocket sender-type 一致性**：`cc.websocket.sender-type` 必须与 `yudao.websocket.sender-type` 一致，否则分布式环境下 CC 消息无法跨节点投递。
-- **编译要求**：根 pom 已配置 Lombok + MapStruct 注解处理器与 `-parameters` 编译参数（Spring Boot 3.2+ 参数名发现依赖）；JAIN-SIP 版本必须统一为 1.2.1.4，避免跨版本 AbstractMethodError。
-- **提交注意**：三个子仓库各自独立提交推送，需在对应目录内执行 git 操作。
+- **编译要求（JDK 25）**：根 pom 已配置 Lombok + MapStruct 注解处理器、`-parameters` 编译参数与显式 `<proc>full</proc>`（JDK 22+ 默认禁用 classpath 隐式注解处理，独立 POM 模块升级 JDK 时最容易踩 Lombok 找不到符号的坑，需同步补 annotationProcessorPaths）；JAIN-SIP 版本必须统一为 1.2.1.4，避免跨版本 AbstractMethodError。
+- **Spring Boot 4 约束**：`spring.autoconfigure.exclude` 配置在 `application.yaml`（含 `spring.profiles.active` 的文档）中不生效，必须放在 `application-{profile}.yaml`；spring-ai-alibaba 2.0.0-M1.1 的 `AutoConfiguration.imports` 注册了 JAR 中不存在的类（如 DashScopeMultimodalEmbeddingAutoConfiguration），需在 profile 配置中排除，遇 "Unable to read meta-data for class X" 先用 `unzip -l` 核对类是否真实存在。
+- **提交注意**：三个子仓库各自独立提交推送，需在对应目录内执行 git 操作；`yudao-cloud` 双分支并行维护（当前工作线 `master-jdk25-cc`，旧环境线 `master-jdk17-cc`），提交前确认分支与推送目标一致。
 
 ## 开发与验证
 
