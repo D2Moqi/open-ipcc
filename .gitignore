@@ -84,3 +84,5 @@ screenshots/
 .codebuddy/
 .workbuddy
 
+/yudao-ui-admin-vue3/.git/
+/yudao-cloud/.git/
