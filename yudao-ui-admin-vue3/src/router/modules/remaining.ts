@@ -823,7 +823,32 @@ const remainingRouter: AppRouteRecordRaw[] = [
         ]
       }
     ]
+  },
+  {
+    path: '/cc/ivr',
+    component: Layout,
+    name: 'ivr',
+    meta: {
+      hidden: true
+    },
+    children: [
+      {
+        path: 'edit/:id/:name',
+        component: () => import('@/views/cc/ivr/ivrEdit.vue'),
+        name: 'IvrEdit',
+        meta: {
+          title: 'ivr设计',
+          noCache: true,
+          hidden: true,
+          canTo: true,
+          icon: '',
+          activeMenu: '/cc/ivr'
+        }
+      }
+    ]
   }
+  // 「业务示例」页面已改为由数据库菜单动态路由承载（system_menu 记录见呼叫中心菜单下），
+  // 无需在 remaining.ts 重复声明，避免静态路由与动态菜单路由冗余。
 ]
 
 export default remainingRouter

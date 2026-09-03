@@ -13,16 +13,16 @@ ESL协议说明:
 - 事件以Content-Type: text/event-plain推送,body为key=value格式
 
 连接信息:
-- 主机: 39.107.224.184
+- 主机: <B服务器公网>
 - 端口: 18021
-- 密码: freeswitch@123321
+- 密码: <密码>
 """
 
-import socket
 import json
-import time
-import re
 import logging
+import re
+import socket
+import time
 
 # 配置日志输出,便于调试ESL交互过程
 logging.basicConfig(
@@ -760,10 +760,10 @@ class EslHelper:
 # 主程序入口(用于独立测试ESL连接)
 # ----------------------------------------------------------------------
 if __name__ == '__main__':
-    # ESL连接信息(对齐当前部署环境: 62.234.191.165)
-    ESL_HOST = '62.234.191.165'
+    # ESL连接信息(对齐当前部署环境: <A服务器公网>)
+    ESL_HOST = '<A服务器公网>'
     ESL_PORT = 18021
-    ESL_PASSWORD = 'freeswitch@123321'
+    ESL_PASSWORD = '<密码>'
 
     helper = EslHelper(ESL_HOST, ESL_PORT, ESL_PASSWORD)
     try:

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # 分析后端日志中的 CHANNEL_PARK 事件, 输出各事件的关键消息头字段
-import re, json
+import json
+import re
 
-log_file = '/Users/wenjiaqi/Documents/ipcc/logs/yudao-server.log'
+log_file = '<本地项目根路径>/logs/yudao-server.log'
 
 pattern = r'ChannelParkEslEventHandler handle address:([^\s]+) EslEvent:(\{.*"eventName":"CHANNEL_PARK".*?\})\]\s*$'
 

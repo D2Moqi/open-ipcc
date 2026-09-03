@@ -140,6 +140,37 @@ FLOW_SPECS: Dict[str, Dict[str, Any]] = {
         "assert_keywords": ["[进入callRoute电话]", "[ivrAI对话]", "中断词命中", "[ivr-转接-坐席处理节点]", "1002"],
         "scenarios": [10],
     },
+    "108": {
+        "route_id": 108,
+        "name": "注册网关呼入",
+        "regex": r"^4005678$",
+        "direction": 1,
+        "delete_prefix": "",
+        "flow_id": 108,
+        "dtmf": None,
+        # 主链: start → transfer(坐席组1, routeValue=1) → end
+        # 注册模式4G网关呼入链路: 识别为 THIRD_PARTY(注册绑定) → 路由108 → flow108 直接转坐席组
+        "node_sequence": ["start", "transfer", "end"],
+        "transfer_expect": {"routeType": "4", "routeValue": "1"},  # routeType=4 坐席组, 组1
+        "assert_keywords": ["[进入callRoute电话]", "[转坐席组]"],
+        "scenarios": [12],
+    },
+    "109": {
+        "route_id": 109,
+        "name": "注册网关呼出",
+        "regex": r"^(8#).*",
+        "direction": 2,
+        "delete_prefix": "8#",
+        "flow_id": 109,
+        "dtmf": None,
+        # 主链: start → transfer(网关, routeType=2 routeValue=46) → end
+        # 注册模式4G网关呼出链路: 8# 前缀 → flow109 → 转接路由 routeValue=46(注册模式网关)
+        # 呼出目标由 sipproxy 按注册绑定动态解析(注册 Contact > 静态配置)
+        "node_sequence": ["start", "transfer", "end"],
+        "transfer_expect": {"routeType": "2", "routeValue": "46"},  # routeType=2 网关, 网关46
+        "assert_keywords": ["[删除前缀]"],
+        "scenarios": [13],
+    },
 }
 
 # 坐席规格: name(SIP 分机号,即 cc_sys_agent.name 列) → 期望 user_id/domain
@@ -157,7 +188,16 @@ GATEWAY_SPEC = {
     "id": 2,
     "name": "第三方网关",
     "username": "18600000000",
-    "address": "62.234.191.165",
+    "address": "<A服务器公网>",
+    "status": 0,
+}
+
+# 注册模式网关规格(场景12/13): id=46 注册模式4G网关, address 可空(地址由 REGISTER 自动学习)
+GATEWAY_REGISTER_SPEC = {
+    "id": 46,
+    "name": "注册模式4G网关",
+    "username": "gw1001",
+    "register_enabled": 1,
     "status": 0,
 }
 
@@ -364,5 +404,39 @@ def validate_specs(db) -> List[str]:
             issues.append("网关2 address 不一致: 期望=%s 实际=%s" % (gspec["address"], gw.get("address")))
         if int(gw.get("status", 0)) != gspec["status"]:
             issues.append("网关2 status 不一致: 期望=%s(启用) 实际=%s" % (gspec["status"], gw.get("status")))
+
+    # ---- 6. 注册模式网关核对(场景12/13) ----
+    reg_rows = db.query(
+        "SELECT id, name, username, register_enabled, status FROM cc_sipproxy_gateway "
+        "WHERE id = %s AND deleted = 0", (GATEWAY_REGISTER_SPEC["id"],)
+    )
+    if not reg_rows:
+        issues.append("注册模式网关缺失: id=%s" % GATEWAY_REGISTER_SPEC["id"])
+    else:
+        rgw = reg_rows[0]
+        rspec = GATEWAY_REGISTER_SPEC
+        if str(rgw.get("name", "")) != rspec["name"]:
+            issues.append("网关%s name 不一致: 期望=%s 实际=%s"
+                          % (rspec["id"], rspec["name"], rgw.get("name")))
+        if str(rgw.get("username", "")) != rspec["username"]:
+            issues.append("网关%s username 不一致: 期望=%s 实际=%s"
+                          % (rspec["id"], rspec["username"], rgw.get("username")))
+        if int(rgw.get("register_enabled", 0)) != rspec["register_enabled"]:
+            issues.append("网关%s register_enabled 不一致: 期望=%s 实际=%s"
+                          % (rspec["id"], rspec["register_enabled"], rgw.get("register_enabled")))
+        if int(rgw.get("status", 0)) != rspec["status"]:
+            issues.append("网关%s status 不一致: 期望=%s(启用) 实际=%s"
+                          % (rspec["id"], rspec["status"], rgw.get("status")))
+
+    # ---- 7. 坐席组可用网关核对(注册模式网关须在 available_gateway_ids, 供呼出选择) ----
+    group_rows2 = db.query(
+        "SELECT available_gateway_ids FROM cc_sys_agent_group WHERE id = 1 AND deleted = 0"
+    )
+    if group_rows2:
+        avail = str(group_rows2[0].get("available_gateway_ids") or "")
+        reg_gw_id = str(GATEWAY_REGISTER_SPEC["id"])
+        if reg_gw_id not in [x.strip() for x in avail.split(",")]:
+            issues.append("坐席组1 available_gateway_ids 缺少注册模式网关%s: 当前=%s"
+                          % (reg_gw_id, avail))
 
     return issues

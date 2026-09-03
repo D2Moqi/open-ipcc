@@ -40,6 +40,7 @@ interface AppState {
   footer: boolean
   theme: ThemeTypes
   fixedMenu: boolean
+  softPhone: boolean
 }
 
 export const useAppStore = defineStore('app', {
@@ -103,7 +104,8 @@ export const useAppStore = defineStore('app', {
         topHeaderHoverColor: '#f6f6f6',
         // 头部边框颜色
         topToolBorderColor: '#eee'
-      }
+      },
+      softPhone: true // 软电话
     }
   },
   getters: {
@@ -187,6 +189,9 @@ export const useAppStore = defineStore('app', {
     },
     getFooter(): boolean {
       return this.footer
+    },
+    getSoftPhone(): boolean {
+      return this.softPhone
     }
   },
   actions: {
@@ -322,6 +327,9 @@ export const useAppStore = defineStore('app', {
     },
     setFooter(footer: boolean) {
       this.footer = footer
+    },
+    setSoftPhone(softPhone: boolean) {
+      this.softPhone = softPhone
     }
   },
   persist: false

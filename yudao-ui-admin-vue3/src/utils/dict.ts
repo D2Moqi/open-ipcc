@@ -356,5 +356,29 @@ export enum DICT_TYPE {
   IM_RTC_CALL_END_REASON = 'im_rtc_call_end_reason', // IM 通话结束原因：1=通话结束 / 2=已拒绝 / 3=已取消 / 4=无人接听 / 5=对方正忙 / 9=通话异常
   IM_RTC_PARTICIPANT_ROLE = 'im_rtc_participant_role', // IM 通话参与角色：1=发起人 / 2=被邀请者 / 3=主动加入者
   IM_RTC_PARTICIPANT_STATUS = 'im_rtc_participant_status', // IM 通话参与状态：10=邀请中 / 20=已加入 / 30=已拒绝 / 40=未应答 / 50=已离开
-  IM_CHANNEL_MATERIAL_TYPE = 'im_channel_material_type' // IM 频道素材内容类型：1=富文本 / 2=外链
+  IM_CHANNEL_MATERIAL_TYPE = 'im_channel_material_type', // IM 频道素材内容类型：1=富文本 / 2=外链
+
+  // ========== cc - 呼叫中心模块  ==========
+  CC_FS_ACL_TYPE = 'cc_fs_acl_type', // cc-fs访问控制类型
+  CC_FS_ONLINE_STATUS = 'cc_fs_online_status', // cc-fs在线状态
+  CC_FS_CONTEXT_FORMAT = 'cc_fs_context_format', // cc-fs内容格式
+  CC_FS_DIALPLAN_CONTEXT_NAME = 'cc_fs_dialplan_context_name', // cc-fs拨号计划内容类型
+  CC_SIP_SUBSCRIBER_STATUS = 'cc_sip_subscriber_status', // cc-sip分机状态
+  CC_SYS_AGENT_ONLINE_STATUS = 'cc_sys_agent_online_status', // cc-坐席状态
+  CC_SYS_VOICE_TYPE = 'cc_sys_voice_type', // cc-语音类型
+  CC_CALL_STATE = 'cc_call_state', // cc-呼叫状态
+  CC_CALL_DIRECTION = 'cc_call_direction', // cc-呼叫方式
+  CC_CALL_ANSWER_FLAG = 'cc_call_answer_flag', // cc-应答标识
+  CC_CALL_HANGUP_DIR = 'cc_call_hangup_dir', // cc-挂机方向
+  CC_CALL_ROUTE_DIRECTION_TYPE = 'cc_call_route_direction_type', // cc-路由方向类型
+  CC_CALL_ROUTE_STATUS = 'cc_call_route_status', // cc-路由启用状态
+  CC_SYS_AGENT_GROUP_STRATEGY_TYPE = 'cc_sys_agent_group_strategy_type', // cc-坐席组-策略类型
+  CC_SYS_AGENT_GROUP_FULL_BUSY_TYPE = 'cc_sys_agent_group_full_busy_type', // cc-坐席组-全忙策略
+  CC_SYS_AGENT_GROUP_OVERFLOW_TYPE = 'cc_sys_agent_group_overflow_type', // cc-坐席组-溢出策略
+  CC_SYS_VOICE_ENGINE = 'cc_sys_voice_engine', //  cc-语音引擎类型
+  CC_SYS_VOICE_MANUFACTURER_TYPE = 'cc_sys_voice_manufacturer_type', // cc-语音引擎厂商
+  CC_SIPPROXY_GATEWAY_REGISTER_MODE = 'cc_sipproxy_gateway_register_mode', // cc-网关注册模式：0=IP直连 1=注册模式
+  CC_SIPPROXY_GATEWAY_REGISTER_STATUS = 'cc_sipproxy_gateway_register_status', // cc-网关注册状态：0=离线 1=在线
+  CC_IVR_INTERIOR_METHOD = 'cc_ivr_interior_method', // cc-IVR内置方法
+  CC_IVR_CONDITION_OPERATOR = 'cc_ivr_condition_operator' // cc-IVR条件操作符
 }

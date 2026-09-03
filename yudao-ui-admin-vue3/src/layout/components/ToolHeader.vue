@@ -16,6 +16,7 @@ import { useDesign } from '@/hooks/web/useDesign'
 import { Icon } from '@/components/Icon'
 import { checkPermi } from '@/utils/permission'
 import { isHorizontalMenuLayout, isMixedNavLayout, isTwoColumnLayout } from '@/utils/layout'
+import { SoftPhone } from '@/layout/components/SoftPhone'
 
 const { getPrefixCls, variables } = useDesign()
 
@@ -63,6 +64,9 @@ const goToChat = () => {
   window.open(href, '_blank')
 }
 
+// 软电话
+const softPhone = computed(() => appStore.getSoftPhone)
+
 export default defineComponent({
   name: 'ToolHeader',
   setup() {
@@ -93,6 +97,7 @@ export default defineComponent({
           </div>
         ) : undefined}
         <div class="h-full flex items-center">
+          {softPhone.value ? <SoftPhone /> : undefined}
           {hasTenantVisitPermission.value ? <TenantVisit /> : undefined}
           <div
             class="v-setting custom-hover"

@@ -99,7 +99,7 @@ vim event_socket.conf.xml
     <param name="nat-map" value="false"/>
     <param name="listen-ip" value="::"/>
     <param name="listen-port" value="18021"/>
-    <param name="password" value="freeswitch@123321"/>
+    <param name="password" value="<密码>"/>
     <param name="apply-inbound-acl" value="event_socket.auto"/>
     <!--<param name="stop-on-bind-error" value="true"/>-->
   </settings>
@@ -133,7 +133,7 @@ vim var.xml
 ``` xml
 
 <!-- 全局默认密码，通常无用，使用其他模块出现密码错误时可尝试使用这个密码 -->
-<X-PRE-PROCESS cmd="set" data="default_password=CHTQg8DOH1UU"/>
+<X-PRE-PROCESS cmd="set" data="default_password=<密码>"/>
 
 <X-PRE-PROCESS cmd="stun-set" data="external_rtp_ip=公网ip"/>
 <X-PRE-PROCESS cmd="stun-set" data="external_sip_ip=公网ip"/>
@@ -202,7 +202,7 @@ tail -f -n 100 /var/log/freeswitch/freeswitch.log
 
 docker exec -it freeswitch sh
 
-fs_cli -P 18021 -p freeswitch@123321
+fs_cli -P 18021 -p <密码>
 
 出现 Error Connecting 错误，多是 freeswitch 未启动成功
 
@@ -274,5 +274,5 @@ sudo tcpdump -i any udp -v -w /opt/tcpdump.pcap
 
 originate {return_ring_ready=true,sip_contact_user=00000,ring_asr=true,fire_asr_events=true,absolute_codec_string=^^:
 G722:PCMU:
-PCMA,origination_caller_id_number=00000,origination_caller_id_name=00000,media_webrtc=true}sofia/external/1002@10.0.0.127:
+PCMA,origination_caller_id_number=00000,origination_caller_id_name=00000,media_webrtc=true}sofia/external/1002@<B服务器内网>:
 5561;transport=tcp &park () 

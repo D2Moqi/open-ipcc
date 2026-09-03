@@ -6,7 +6,7 @@ Playwright 浏览器自动化测试封装
 
 主要功能:
   - 启动/关闭 Chromium 浏览器(自动授予 WebRTC 所需的摄像头/麦克风权限)
-  - 模拟坐席登录系统(admin/admin123)
+  - 模拟坐席登录系统(admin/<密码>)
   - 操作软电话组件(SoftPhone.vue)完成 SIP 签入/签出
   - 切换就绪/忙碌状态
   - 发起呼叫、接听来电、挂断、拒接
@@ -17,9 +17,10 @@ Playwright 浏览器自动化测试封装
 依赖: playwright==1.42.0
 """
 
-from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
-import time
 import os
+import time
+from playwright.sync_api import sync_playwright, Page, Browser, BrowserContext
+
 from config import LOCAL_FRONTEND_URL
 
 
@@ -286,7 +287,7 @@ class BrowserTest:
             # 使用 expect 风格的轮询等待,最长等待 90 秒
             # 注意:某些情况下 Vue Router 可能不更新 URL(如 hash 模式或路由守卫问题),
             # 因此除了检查 URL 外,还检查软电话组件是否出现作为登录成功的标志
-            # 超时从 30 秒调整为 90 秒:远程数据库(mysql6.sqlpub.com)网络延迟较高,
+            # 超时从 30 秒调整为 90 秒:远程数据库(<云数据库域名>)网络延迟较高,
             # dict-data/simple-list 等接口可能耗时 13-21 秒,原 30 秒超时不足
             start_time = time.time()
             while time.time() - start_time < 90:
@@ -1723,7 +1724,7 @@ if __name__ == "__main__":
 
         # 步骤3:登录系统
         print("=== 步骤3:登录系统 ===")
-        if tester.login(page, "admin", "admin123"):
+        if tester.login(page, "admin", "<密码>"):
             print("登录成功")
         else:
             print("登录失败")

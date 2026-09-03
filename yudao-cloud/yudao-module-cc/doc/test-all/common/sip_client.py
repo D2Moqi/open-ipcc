@@ -9,7 +9,7 @@ SIP 软电话客户端封装(IVR 流程测试专用)
              控制台模式支持 呼叫/接听/挂断/# RFC2833 DTMF / * SIP INFO DTMF / dq 通话质量转储)
 
 需求背景: IVR 端到端测试需要 18600000000/18600000001 两个软电话注册到
-第三方 FS(62.234.191.165:9988,域 1.com:1),支持呼叫、接听、DTMF、
+第三方 FS(<A服务器公网>:9988,域 1.com:1),支持呼叫、接听、DTMF、
 真实 RTP 收流字节统计(供断言"收到了语音数据")。
 预期结果: 测试脚本通过 SipClient 完成注册/呼叫/收号/语音校验。
 
@@ -42,20 +42,20 @@ import config  # noqa: E402
 logger = logging.getLogger("sip_client")
 
 # ==================== 常量(来自 config.py) ====================
-# 第三方 FS 注册地址(62.234.191.165:9988)
+# 第三方 FS 注册地址(<A服务器公网>:9988)
 REGISTRAR_HOST = config.THIRD_PARTY_FS_HOST
 REGISTRAR_PORT = config.THIRD_PARTY_FS_SIP_PORT
-# 注册域名与认证 realm: 实测第三方 FS 目录域名(realm)为 62.234.191.165
-# (ESL list_users 核实, 账号 18600000000~18600000029 均在域 62.234.191.165;
+# 注册域名与认证 realm: 实测第三方 FS 目录域名(realm)为 <A服务器公网>
+# (ESL list_users 核实, 账号 18600000000~18600000029 均在域 <A服务器公网>;
 #  用 1.com 域注册会被拒绝 403 Forbidden)。config.SIP_DOMAIN(1.com:1) 是
 # CC 坐席域,不适用于第三方 FS 软电话。
 THIRD_PARTY_SIP_DOMAIN = config.THIRD_PARTY_FS_HOST
 AUTH_REALM = config.THIRD_PARTY_FS_HOST
-# registrar URI: sip:62.234.191.165:9988
+# registrar URI: sip:<A服务器公网>:9988
 # 实测结论: 该 FS 9988 UDP 无响应(OPTIONS 探测超时), TCP 返回 200 OK,
 # 故注册/呼叫统一使用 TCP 传输(AOR 与 registrar 均带 ;transport=tcp)
 REGISTRAR_URI = "sip:%s:%s;transport=tcp" % (REGISTRAR_HOST, REGISTRAR_PORT)
-# 场景1 呼叫目标: sip:4001234@39.107.224.184:5561
+# 场景1 呼叫目标: sip:4001234@<B服务器公网>:5561
 INBOUND_TARGET_URI = "sip:%s@%s:%s" % (
     config.IVR_INBOUND_ROUTE_NUM,
     config.SIP_PROXY_PUBLIC_IP,
@@ -262,8 +262,8 @@ class _PjsuaCliBackend(_BackendBase):
                     "--turn-passwd", TURN_PASSWORD]
         else:
             # 非 ICE 模式仍加 STUN(auto-update-nat 默认开启): 让 pjsua 检测 NAT 后把
-            # Contact/SDP 媒体地址更新为公网 IP(如 125.33.53.38), 否则 SDP 广告局域网 IP
-            # (192.168.1.17)云端 FS 无法回发 RTP(媒体 rxBytes=0)。
+            # Contact/SDP 媒体地址更新为公网 IP(如 <本地出口公网>), 否则 SDP 广告局域网 IP
+            # (<本地局域网IP>)云端 FS 无法回发 RTP(媒体 rxBytes=0)。
             # 不启用 ICE 原因: ICE 模式会强制 INVITE 走 TCP, 而 sipproxy 对 TCP 直连
             # INVITE 存在缺陷(100 Trying 后无响应), 呼叫必失败; UDP 直连 + STUN 已足够。
             cmd += ["--stun-srv", STUN_SERVER]
@@ -889,7 +889,7 @@ class SipClient:
     # ---------- 注册 ----------
     def register(self, username: Optional[str] = None, password: Optional[str] = None,
                  timeout: float = 20.0, retries: int = 3) -> bool:
-        """注册到第三方 FS(62.234.191.165:9988,域 1.com:1),带重试与超时"""
+        """注册到第三方 FS(<A服务器公网>:9988,域 1.com:1),带重试与超时"""
         uname = username or self.username
         pwd = password or self._password
         for attempt in range(1, retries + 1):
@@ -906,7 +906,7 @@ class SipClient:
 
     # ---------- 呼叫 ----------
     def call(self, target_uri: str) -> None:
-        """发起呼叫,如 sip:4001234@39.107.224.184:5561"""
+        """发起呼叫,如 sip:4001234@<B服务器公网>:5561"""
         logger.info("[%s] 呼叫 %s", self.username, target_uri)
         self._impl.call(target_uri)
 

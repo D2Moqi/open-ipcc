@@ -2,13 +2,13 @@
 """
 聚焦验证脚本: 场景1 内部呼叫 (坐席A 1001 -> 坐席B 1002)
 =========================================================
-目的: 验证 cc_fs_config.ip=10.2.0.14 时, sipproxy 能正确把坐席 INVITE
+目的: 验证 cc_fs_config.ip=<A服务器内网> 时, sipproxy 能正确把坐席 INVITE
       转发到容器 IP(宿主机可达), 触发 FS park -> CHANNEL_PARK -> cc-server 路由 -> B 振铃接听。
 
 说明: 本机(当前 Mac)无法直连云端 ESL/SIP 端口(18021/18121/5561 被安全组拦截),
       因此原 test_scenarios.py 的 setup() 会因 esl.connect() 失败而中止。
       本脚本不依赖 ESL, 仅用浏览器走真实链路:
-        JsSIP(浏览器) -> cc.wenmoqi.top(nginx) -> sipproxy(:5561) -> FS park(10.2.0.14:15580)
+        JsSIP(浏览器) -> <B服务器域名>(nginx) -> sipproxy(:5561) -> FS park(<A服务器内网>:15580)
         -> CHANNEL_PARK -> cc-server 路由 -> FS originate -> B 振铃 -> 接听 -> bridge
       并以 DB 中 call_type=3 的通话记录作为客观证据。
 
@@ -49,7 +49,7 @@ def db_count_internal_calls_since(start_dt):
 
 
 def main():
-    print("########## 场景1 聚焦验证 (DB ip=10.2.0.14) ##########")
+    print("########## 场景1 聚焦验证 (DB ip=<A服务器内网>) ##########")
     test_start = datetime.now()
     print(f"[时间] 测试开始: {test_start}")
 
@@ -149,7 +149,7 @@ def main():
             print("   ", r)
         if len(rows) >= 1:
             print("\n########## 结果: PASS ##########")
-            print("场景1 内部呼叫成功: sipproxy 已将 INVITE 转发到 10.2.0.14:15580(FS park),")
+            print("场景1 内部呼叫成功: sipproxy 已将 INVITE 转发到 <A服务器内网>:15580(FS park),")
             print("CHANNEL_PARK 触发, cc-server 路由到坐席B 并桥接, CDR(call_type=3) 已生成。")
             return 0
         else:

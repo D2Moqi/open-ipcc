@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-模拟第三方网关-运营商的fs部署脚本 一键部署脚本（跨平台）
-"""
+"""模拟第三方网关-运营商的fs部署脚本 一键部署脚本（跨平台）"""
 
+import argparse
 import base64
+import os
 import random
 import re
 import socket
@@ -14,21 +14,39 @@ import sys
 import time
 
 # ==================== 远程服务器常量 ====================
-REMOTE_HOST = "62.234.191.165"
+REMOTE_HOST = "<A服务器公网>"
 SSH_PORT = 22
-SSH_USER = "ubuntu"
-SSH_PASSWORD = "Moqi147852369"
+SSH_USER = "<账户>"
+SSH_PASSWORD = "<密码>"
 
 # ==================== FreeSWITCH 部署常量 ====================
 # FreeSWITCH 对外 SIP/RTP 公网 IP（与服务器公网 IP 一致）
-SERVER_IP = "62.234.191.165"
+SERVER_IP = "<A服务器公网>"
 INTERNAL_PORT = 9988
 EXTERNAL_PORT = 9977
 ESL_PORT = 9966
 ESL_PASSWORD = "123321"
 EXTENSION_PASSWORD = "123321"
-# 外呼网关地址（业务参数，指向第三方运营商网关，与部署服务器本身无关）
-OUTBOUND_SERVER = "39.107.224.184:5561"
+# 外呼网关地址（业务参数，指向 CC 系统 sipproxy 部署地址；sipproxy 实际部署于 <A服务器公网>:5561）
+OUTBOUND_SERVER = "<A服务器公网>:5561"
+# external profile 对外通告 IP（ext-sip-ip/ext-rtp-ip）
+# 历史教训：云 NAT 环境下 external 通告公网 IP 时，回程 SIP/RTP 到公网 IP 不可达（实测 Contact 回程失败），
+# 必须通告内网 IP（sipproxy 与 fs3 同机 <A服务器公网> 内网地址 <A服务器内网>），由云安全组/路由负责外部可达。
+# internal profile（分机注册）保持通告公网 SERVER_IP。
+EXTERNAL_EXT_IP = "<A服务器内网>"
+# REGISTER 模式 4G 网关模拟（fs3 作为注册型网关向 sipproxy 注册）
+# 与 cc_sipproxy_gateway.id=46（register_enabled=1）账号一致：场景12/13（注册网关呼入/呼出）依赖此注册绑定；
+# 重新部署 fs3 时必须随脚本生成，否则注册绑定丢失导致场景12/13 链路失败。
+REGISTER_GW_NAME = "sim-4g-gateway"
+REGISTER_GW_USERNAME = "gw1001"
+REGISTER_GW_PASSWORD = "123456"
+REGISTER_GW_REALM = SERVER_IP
+# register-proxy: REGISTER 发送目标（内网地址，sipproxy 与 fs3 同机；公网地址在云 NAT 平面回程不可达）
+REGISTER_GW_REGISTER_PROXY = "%s:5561" % EXTERNAL_EXT_IP
+# proxy: 注册 200 OK 后携带 Contact 的代理（呼入 INVITE 到达 sipproxy 的公网入口）
+REGISTER_GW_PROXY = "%s:5561" % SERVER_IP
+REGISTER_GW_EXPIRE_SECONDS = "120"
+REGISTER_GW_RETRY_SECONDS = "30"
 FS_IMAGE = "freeswitch:1.10.12"
 FS_IMAGE_SOURCE = "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/safarov/freeswitch:1.10.12"
 # 是否跳过 SIP 注册与呼叫测试（True=跳过，False=执行完整 SIP 测试）
@@ -38,7 +56,7 @@ FS_IMAGE_SOURCE = "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/safarov/fr
 SKIP_SIP_TEST = False
 
 # ==================== 容器与配置目录常量 ====================
-EXTENSION_COUNT = 100
+EXTENSION_COUNT = int(os.environ.get("FS_EXTENSION_COUNT", "100"))
 EXTENSION_PREFIX = "186"
 # 分机序号位数：分机号 = 前缀(3位) + 序号(8位) = 11 位，范围 18600000000 ~ 18600000099
 EXTENSION_SEQUENCE_DIGITS = 8
@@ -63,6 +81,11 @@ def log_info(message):
 def log_error(message):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     print("\033[0;31m[%s] [ERROR] %s\033[0m" % (timestamp, message))
+
+
+def log_warn(message):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    print("\033[0;33m[%s] [WARN] %s\033[0m" % (timestamp, message))
 
 
 def log_success(message):
@@ -196,24 +219,27 @@ def update_var_xml(ssh_client, config_dir, server_ip, internal_port, external_po
     log_info("  vars.xml 更新完成 (IP: %s)" % server_ip)
 
 
-def update_directory_xml(ssh_client, config_dir, server_ip, ext_password):
+def update_directory_xml(ssh_client, config_dir, server_ip, ext_password, extension_count=None):
     """
     更新 directory/default.xml：全量写入自定义分机配置。
 
     说明：此处采用全量覆盖而非增量修改，原因如下：
-        1. 需要批量生成 100 个自定义分机（18600000000~18600000099，11 位坐席号），
+        1. 需要批量生成 100+ 个自定义分机（18600000000~18600000099+，11 位坐席号），
            默认 vanilla 的 directory 仅含少量示例用户（如 1000/1001），无法通过简单增量实现。
         2. domain name 必须改为 server_ip（与 SIP 客户端注册域名一致），否则注册失败。
         3. 必须使用 <include> 标签（非 <document>），否则 directory 加载器无法合并。
-    预期结果：directory/default.xml 包含正确的 domain name 和 100 个分机配置。
-    处理逻辑：生成 100 个 user 节点，全量写入并清理 directory/default/ 子目录的旧用户文件。
+    预期结果：directory/default.xml 包含正确的 domain name 和 extension_count 个分机配置。
+    处理逻辑：生成 extension_count 个 user 节点（由 FS_EXTENSION_COUNT 环境变量或
+    --extensions 参数注入，默认 100，支持 100+），全量写入并清理 directory/default/
+    子目录的旧用户文件。
     """
     log_info("更新 directory/default.xml ...")
     dir_path = "%s/directory/default.xml" % config_dir
+    count = EXTENSION_COUNT if extension_count is None else extension_count
     users = []
-    # 生成 100 个 11 位模拟分机（18600000000 ~ 18600000099）
-    for i in range(EXTENSION_COUNT):
-        # 分机号 = 前缀 186 + 8 位序号，共 11 位（18600000000 ~ 18600000099）
+    # 生成 count 个 11 位模拟分机（18600000000 ~ 递增），支持 100+ 扩展
+    for i in range(count):
+        # 分机号 = 前缀 186 + 8 位序号，共 11 位（18600000000 ~ 18600000099+）
         exten = "%s%0*d" % (EXTENSION_PREFIX, EXTENSION_SEQUENCE_DIGITS, i)
         users.append("""            <user id="%s">
               <params>
@@ -250,7 +276,7 @@ def update_directory_xml(ssh_client, config_dir, server_ip, ext_password):
     remote_write_file(ssh_client, dir_path, content)
     # 清理 directory/default/ 子目录中的默认用户文件，避免旧 domain 配置干扰
     remote_exec(ssh_client, "rm -f %s/directory/default/*.xml" % config_dir)
-    log_info("  directory/default.xml 更新完成 (domain: %s, %d 个分机)" % (server_ip, EXTENSION_COUNT))
+    log_info("  directory/default.xml 更新完成 (domain: %s, %d 个分机)" % (server_ip, count))
 
 
 def update_dialplan_xml(ssh_client, config_dir, outbound_server):
@@ -260,13 +286,20 @@ def update_dialplan_xml(ssh_client, config_dir, outbound_server):
     说明：此处采用全量覆盖而非增量修改，原因如下：
         1. vanilla 的 dialplan/default.xml 包含大量示例 extension（caller-id、toll-limit、
            intercept、unloop 等），若保留会优先匹配并干扰自定义路由规则。
-        2. 需要精确定义呼入路由（匹配 186xxxxxxxx，即 186 + 8 位共 11 位分机号）
-           和呼出路由（转发到外呼网关），
-           默认 extension 的正则表达式会与目标路由冲突。
+        2. 需要精确定义分机互拨（186xxxxxxxx）与转发到 CC sipproxy 的出局路由。
         3. 必须使用 <include> 标签（与 directory 相同的加载机制）。
     预期结果：dialplan/default.xml 仅包含自定义的 inbound_direct_extension 和
     outbound_to_gateway 两条路由。
     处理逻辑：全量写入两条路由规则，bridge 使用 ${domain_name} 内置变量。
+
+    路由语义（与 test-all 测试场景的复用关系）：
+    - inbound_direct_extension：186xxxxxxxx 分机互拨（场景12/13 的 pjsua 软电话注册于本 profile，
+      fs3 收到呼叫 18600000000 时 bridge 到 user）。
+    - outbound_to_gateway：其余号码一律转发到 OUTBOUND_SERVER（CC sipproxy）。它不止承担"分机呼外线"
+      的呼出角色，还承担"模拟手机呼入 CC 号码"（如场景3/4/12 的 4001234/4005678）的呼入转发：
+      呼入号码不匹配 186 分机正则，落入 ^.*$ 兜底后被 bridge 到 sipproxy，由 sipproxy 按来源识别
+      （注册绑定/源 IP）归类 THIRD_PARTY 后走 CC 呼入路由。因此"出入呼路由"是同一跳转发，
+      不要把它理解为真实的运营商出局网关。
     """
     log_info("更新 dialplan/default.xml ...")
     dialplan_path = "%s/dialplan/default.xml" % config_dir
@@ -289,10 +322,10 @@ def update_dialplan_xml(ssh_client, config_dir, outbound_server):
   </context>
 </include>""" % outbound_server
     remote_write_file(ssh_client, dialplan_path, content)
-    log_info("  dialplan/default.xml 更新完成")
+    log_info("  dialplan/default.xml 更新完成 (转发目标: %s)" % outbound_server)
 
 
-def update_sip_profiles(ssh_client, config_dir, server_ip, internal_port, external_port):
+def update_sip_profiles(ssh_client, config_dir, server_ip, internal_port, external_port, external_ext_ip):
     """
     增量更新 SIP Profiles：只修改端口、IP 等关键参数，保留默认的 RTP 端口范围、
     NAT 设置等大量配置。
@@ -307,13 +340,18 @@ def update_sip_profiles(ssh_client, config_dir, server_ip, internal_port, extern
     处理逻辑：
         1. 分别读取 internal.xml 和 external.xml 原始内容
         2. 用 _xml_set_params 增量修改端口、IP、认证等关键 param
+
+    IP 通告策略（与运行环境一致，历史踩坑点）：
+    - internal profile（分机注册，pjsua/软电话直连公网）：ext-sip-ip/ext-rtp-ip 通告公网 SERVER_IP
+    - external profile（转发到 sipproxy 的对外接口）：ext-sip-ip/ext-rtp-ip 通告内网 EXTERNAL_EXT_IP，
+      云 NAT 回程才可达（公网通告实测 Contact 回程失败）；监听 sip-ip/rtp-ip 均为 0.0.0.0 由安全组放行。
     """
     log_info("增量更新 SIP Profiles ...")
     int_tls = int(internal_port) + 1
     ext_tls = int(external_port) + 1
 
     # ---- internal profile ----
-    # sip-ip=0.0.0.0（FreeSWITCH 实际绑定 local_ip_v4=内网IP 10.2.0.14）：
+    # sip-ip=0.0.0.0（FreeSWITCH 实际绑定 local_ip_v4=内网IP <A服务器内网>）：
     # 云 NAT 模式下外部访问 公网IP:9988 会 DNAT 到 内网IP:9988，FS 监听内网才能被外部
     # （如 pjsua 软电话注册）访问；服务器内部访问则用 内网IP:9988（sipproxy 出局 Route
     # 通过网关 toSipProxyIp 配置内网IP 发送）。ext-sip-ip/ext-rtp-ip=公网IP 对外通告。
@@ -338,14 +376,14 @@ def update_sip_profiles(ssh_client, config_dir, server_ip, internal_port, extern
         "  sip_profiles/internal.xml 增量更新完成 (sip-ip=%s, rtp-ip=0.0.0.0, ext-sip-ip=%s)" % (server_ip, server_ip))
 
     # ---- external profile ----
-    # 同 internal，sip-ip=0.0.0.0 监听内网（外部 DNAT 可达），ext-sip-ip=公网IP 对外通告
+    # 同 internal，sip-ip=0.0.0.0 监听内网（外部 DNAT 可达），ext-sip-ip=内网IP 对 sipproxy 通告
     external_path = "%s/sip_profiles/external.xml" % config_dir
     content = remote_read_file(ssh_client, external_path)
     content = _xml_set_params(content, "</settings>", {
         "sip-port": external_port,
         "tls-port": ext_tls,
-        "ext-rtp-ip": server_ip,
-        "ext-sip-ip": server_ip,
+        "ext-rtp-ip": external_ext_ip,
+        "ext-sip-ip": external_ext_ip,
         "rtp-ip": "0.0.0.0",
         "sip-ip": "0.0.0.0",
         "auth-calls": "false",
@@ -357,7 +395,47 @@ def update_sip_profiles(ssh_client, config_dir, server_ip, internal_port, extern
         "outbound-codec-prefs": "PCMU,PCMA,G729,G722,OPUS",
     })
     remote_write_file(ssh_client, external_path, content)
-    log_info("  sip_profiles/external.xml 增量更新完成 (sip-ip=0.0.0.0, ext-sip-ip=%s)" % server_ip)
+    log_info("  sip_profiles/external.xml 增量更新完成 (sip-ip=0.0.0.0, ext-sip-ip=%s)" % external_ext_ip)
+
+
+def update_sofia_gateways(ssh_client, config_dir, server_ip):
+    """
+    生成 REGISTER 模式 4G 网关模拟配置（sip_profiles/external/sim-4g-gateway.xml）。
+
+    需求背景：fs3 不仅模拟"运营商 FS"，还以网关身份向 CC sipproxy REGISTER（账号 gw1001），
+    用于场景12（注册网关呼入 4005678）/场景13（注册网关呼出 8#18600000000）。
+    sipproxy 按此注册绑定识别呼入来源（THIRD_PARTY）与解析呼出目标（注册 Contact），
+    若缺少该配置（如历史手动追加、重部署后丢失），场景12/13 链路必然失败。
+
+    参数语义（与 sipproxy 网关表 cc_sipproxy_gateway.id=46 对齐）：
+    - username/password: sipproxy Digest 认证凭据（401 挑战 realm=网关表 register_realm）
+    - realm: 本网关 401 认证域（与网关表 register_realm 一致，缺少时 sipproxy 按 From 域/公网 IP 回退）
+    - register-proxy: REGISTER 发送目标：内网 sipproxy（同机 <A服务器内网>:5561）
+    - proxy: 注册后呼叫发往的代理：公网 sipproxy（<A服务器公网>:5561，测试场景从公网可达）
+    - expire-seconds: 注册有效期（sipproxy 网关表 register_max_expires 上限内，超限会被压缩）
+    预期结果：external/sim-4g-gateway.xml 生成，reloadxml 后 sofia 以 gw1001 向 sipproxy REGISTER。
+    处理逻辑：全量写入 gateway 节点（external profile 目录下 <gateway> 文件自动加载）。
+    """
+    log_info("生成 sofia 网关配置 sim-4g-gateway.xml ...")
+    gateway_path = "%s/sip_profiles/external/%s.xml" % (config_dir, REGISTER_GW_NAME)
+    content = """<include>
+  <gateway name="%s">
+    <param name="username" value="%s"/>
+    <param name="realm" value="%s"/>
+    <param name="register-proxy" value="%s"/>
+    <param name="password" value="%s"/>
+    <param name="proxy" value="%s"/>
+    <param name="register" value="true"/>
+    <param name="expire-seconds" value="%s"/>
+    <param name="retry-seconds" value="%s"/>
+    <param name="register-transport" value="udp"/>
+  </gateway>
+</include>""" % (
+        REGISTER_GW_NAME, REGISTER_GW_USERNAME, REGISTER_GW_REALM,
+        REGISTER_GW_REGISTER_PROXY, REGISTER_GW_PASSWORD, REGISTER_GW_PROXY,
+        REGISTER_GW_EXPIRE_SECONDS, REGISTER_GW_RETRY_SECONDS)
+    remote_write_file(ssh_client, gateway_path, content)
+    log_info("  %s 生成完成 (账号 %s，注册目标 %s)" % (gateway_path, REGISTER_GW_USERNAME, REGISTER_GW_REGISTER_PROXY))
 
 
 def create_ssh_client(host, port, username, password):
@@ -574,9 +652,18 @@ def remote_update_configs(ssh_client, config):
     update_acl_conf(ssh_client, cd)
     update_var_xml(ssh_client, cd, config["server_ip"], config["internal_port"], config["external_port"],
                    config["extension_password"])
-    update_directory_xml(ssh_client, cd, config["server_ip"], config["extension_password"])
+    update_directory_xml(ssh_client, cd, config["server_ip"], config["extension_password"],
+                         config.get("extension_count"))
     update_dialplan_xml(ssh_client, cd, config["outbound_server"])
-    update_sip_profiles(ssh_client, cd, config["server_ip"], config["internal_port"], config["external_port"])
+    update_sip_profiles(ssh_client, cd, config["server_ip"], config["internal_port"], config["external_port"],
+                        config.get("external_ext_ip", EXTERNAL_EXT_IP))
+    # REGISTER 模式 4G 网关模拟：重部署后必须随脚本生成，否则场景12/13 注册绑定丢失（历史手动追加的坑）
+    # 默认开启；仅部署分机侧等不需要注册网关的环境可用 --no-sim-register-gateway 关闭
+    if config.get("sim_register_gateway", True):
+        update_sofia_gateways(ssh_client, cd, config["server_ip"])
+        log_success("sim-4g-gateway sofia gateway 配置已生成")
+    else:
+        log_info("跳过 sim-4g-gateway sofia gateway 配置（--no-sim-register-gateway）")
     log_success("所有配置文件增量更新完成")
 
 
@@ -623,7 +710,7 @@ def verify_deployment(ssh_client, config):
     log_info("等待 FreeSWITCH 模块加载（10 秒）...")
     time.sleep(10)
 
-    log_info("[1/5] 测试 ESL 连接...")
+    log_info("[1/6] 测试 ESL 连接...")
     status = remote_exec(ssh_client, "%s 'status'" % fs_cli)
     if status:
         log_success("ESL 连接成功")
@@ -631,24 +718,33 @@ def verify_deployment(ssh_client, config):
     else:
         log_error("ESL 连接失败")
 
-    log_info("[2/5] 检查 Sofia Profile 状态...")
+    log_info("[2/6] 检查 Sofia Profile 状态...")
     sofia = remote_exec(ssh_client, "%s 'sofia status'" % fs_cli)
     print("    %s" % sofia.replace("\n", "\n    ") if sofia else "    (无输出)")
 
-    log_info("[3/5] 检查分机列表...")
+    log_info("[3/6] 检查分机列表...")
     users = remote_exec(ssh_client, "%s 'show users' | head -25" % fs_cli)
     print("    %s" % users.replace("\n", "\n    ") if users else "    (无输出)")
 
-    log_info("[4/5] 检查端口监听状态...")
+    log_info("[4/6] 检查端口监听状态...")
     ports_cmd = "netstat -tlnp 2>/dev/null | grep -E '%s|%s|%s' || ss -tlnp | grep -E '%s|%s|%s'" % (
         internal_port, external_port, esl_port, internal_port, external_port, esl_port)
     ports = remote_exec(ssh_client, ports_cmd)
     print("    %s" % ports.replace("\n", "\n    ") if ports else "    (未检测到端口)")
 
-    log_info("[5/5] FreeSWITCH 最近日志...")
+    log_info("[5/6] FreeSWITCH 最近日志...")
     logs = remote_exec(ssh_client,
                        "docker exec %s tail -n 30 /var/log/freeswitch/freeswitch.log 2>/dev/null || echo '(无日志)'" % container_name)
     print("    %s" % logs.replace("\n", "\n    ") if logs else "    (无日志)")
+
+    log_info("[6/6] 检查 sim-4g-gateway 网关注册状态...")
+    reg = remote_exec(ssh_client, "%s 'sofia status profile external gw'" % fs_cli)
+    if reg and REGISTER_GW_NAME in reg and re.search(r"REGOK|REGED", reg):
+        log_success("sim-4g-gateway 注册成功（REGOK/REGED），场景12/13 前置依赖就绪")
+        print("    %s" % reg.replace("\n", "\n    "))
+    else:
+        log_error("sim-4g-gateway 未注册成功（无 REGOK/REGED）——场景12/13 前置依赖将失败")
+        print("    %s" % reg.replace("\n", "\n    ") if reg else "    (无输出)")
 
     log_success("部署验证完成")
 
@@ -1100,6 +1196,80 @@ def run_sip_tests(ssh_client, config):
     log_info("=" * 60)
 
 
+def update_users_only(ssh_client, config, dry_run=False):
+    """
+    仅在线更新 directory/default.xml 并 reloadxml（不重启容器），用于扩展分机数量。
+
+    需求背景：分机数量扩展（如 100 → 120）只需重新生成 directory 配置，reloadxml 即可
+    生效；重启容器（15s 级）会造成在线注册抖动与媒体中断，不适合在线扩容场景。
+    预期结果：directory/default.xml 被重写为目标分机数，list_users 验证数量达到预期。
+    处理逻辑：
+        1. 按端口前缀定位已运行的 freeswitch 容器
+        2. 只重写 directory/default.xml（复用 update_directory_xml 生成逻辑）
+        3. reloadxml 生效，等待 2s 后 list_users 验证用户数
+    :param ssh_client: SSH 客户端（dry_run=True 时可为 None，不执行远程操作）
+    :param config: 部署配置 dict（需含 internal_port/esl_port 用于定位容器）
+    :param dry_run: True 时只打印将生成的用户数与起止号，不执行任何远程写入
+    """
+    count = EXTENSION_COUNT if config.get("extension_count") is None else config["extension_count"]
+    first = "%s%0*d" % (EXTENSION_PREFIX, EXTENSION_SEQUENCE_DIGITS, 0)
+    last = "%s%0*d" % (EXTENSION_PREFIX, EXTENSION_SEQUENCE_DIGITS, count - 1)
+    log_info("目标分机数: %d (范围 %s ~ %s)" % (count, first, last))
+    if dry_run:
+        log_info("[dry-run] 跳过远程写入，仅打印将生成的 directory/default.xml 用户信息")
+        users = []
+        for i in range(count):
+            exten = "%s%0*d" % (EXTENSION_PREFIX, EXTENSION_SEQUENCE_DIGITS, i)
+            users.append('      <user id="%s"/>' % exten)
+        print("\n".join(users[:3]))
+        print("      ...(共 %d 个用户)..." % count)
+        print("\n".join(users[-2:]))
+        log_success("[dry-run] 验证通过：将生成 %d 个分机" % count)
+        return
+
+    # 定位已运行的 freeswitch 容器（按 internal_port_esl_port 前缀）
+    pattern = "freeswitch_%s_%s_" % (config["internal_port"], config["esl_port"])
+    containers_raw = remote_exec(ssh_client, 'docker ps --filter "name=%s" --format "{{.Names}}"' % pattern)
+    containers = [c.strip() for c in containers_raw.split("\n") if c.strip()]
+    if not containers:
+        log_error("未找到运行的 FreeSWITCH 容器（前缀 %s），请先执行完整部署" % pattern)
+        sys.exit(1)
+    if len(containers) > 1:
+        log_warn("发现多个匹配容器，取第一个: %s" % containers)
+    container = containers[0]
+    # esl_exec 依赖 config["container_name"] 定位容器, 在线模式补设(完整部署由 run_deployment 设置)
+    config["container_name"] = container
+    # 配置目录为挂载卷（/etc/<容器名>），与部署时 get_config_dir 一致
+    config_dir = get_config_dir(container)
+    log_info("定位容器: %s | 配置目录: %s" % (container, config_dir))
+
+    # 备份当前 directory 配置（幂等回滚用）
+    backup_path = "%s/directory/default.xml.bak" % config_dir
+    remote_exec(ssh_client, "cp -f %s/directory/default.xml %s 2>/dev/null || true" % (config_dir, backup_path))
+    log_info("已备份原配置: %s" % backup_path)
+
+    update_directory_xml(ssh_client, config_dir, config["server_ip"],
+                         config["extension_password"], count)
+    # directory 变更 reloadxml 即可生效，无需重启容器
+    log_info("reloadxml 生效中...")
+    esl_exec(ssh_client, config, "reloadxml")
+    time.sleep(2)
+
+    # 验证：list_users 应覆盖新分机数(输出行格式 'userid|context|domain|...', 按行首全号匹配)
+    users = esl_exec(ssh_client, config, "list_users")
+    registered_ids = set(re.findall(r"(?m)^(18\d{9})\|", users or ""))
+    user_count = 0
+    for i in range(count):
+        ext = "%s%0*d" % (EXTENSION_PREFIX, EXTENSION_SEQUENCE_DIGITS, i)
+        if ext in registered_ids:
+            user_count += 1
+    if user_count >= count:
+        log_success("在线扩容验证通过：list_users 命中 %d/%d 个分机" % (user_count, count))
+    else:
+        log_error("在线扩容验证失败：list_users 仅命中 %d/%d 个分机，请检查 FS 日志" % (user_count, count))
+        sys.exit(1)
+
+
 def run_deployment(ssh_client, config):
     config["container_name"] = generate_container_name()
     config["config_dir"] = get_config_dir(config["container_name"])
@@ -1129,8 +1299,31 @@ def run_deployment(ssh_client, config):
 
 def main():
     """
-    脚本入口：使用顶部定义的固定常量构造部署配置
+    脚本入口：解析命令行参数，支持完整部署与在线分机扩容两种模式。
+
+    参数：
+        --update-users-only   仅在线重写 directory 分机配置并 reloadxml（不重启容器）
+        --extensions N        目标分机数量（默认 FS_EXTENSION_COUNT 环境变量，缺省 100）
+        --dry-run             只打印将生成的分机信息，不执行任何远程写入
+        --skip-sip-test       跳过部署后的 SIP 注册/呼叫测试
     """
+    parser = argparse.ArgumentParser(description="模拟第三方网关-运营商的 FreeSWITCH 部署脚本")
+    parser.add_argument("--update-users-only", action="store_true", default=False,
+                        help="仅在线重写 directory 分机配置并 reloadxml（不重启容器）")
+    parser.add_argument("--extensions", type=int, default=None,
+                        help="目标分机数量（默认取 FS_EXTENSION_COUNT 环境变量，缺省 100）")
+    parser.add_argument("--dry-run", action="store_true", default=False,
+                        help="只打印将生成的分机信息，不执行任何远程写入")
+    parser.add_argument("--skip-sip-test", action="store_true", default=False,
+                        help="跳过部署后的 SIP 注册/呼叫测试")
+    parser.add_argument("--no-sim-register-gateway", action="store_true", default=False,
+                        help="不生成 sim-4g-gateway（注册模式4G网关模拟）配置（默认生成，场景12/13 依赖）")
+    args = parser.parse_args()
+
+    ext_count = EXTENSION_COUNT if args.extensions is None else args.extensions
+    if ext_count < 1:
+        log_error("--extensions 必须 >= 1")
+        sys.exit(1)
     config = {
         "remote": REMOTE_HOST,
         "server_ip": SERVER_IP,
@@ -1139,17 +1332,27 @@ def main():
         "esl_port": ESL_PORT,
         "esl_password": ESL_PASSWORD,
         "extension_password": EXTENSION_PASSWORD,
+        "extension_count": ext_count,
         "outbound_server": OUTBOUND_SERVER,
+        "external_ext_ip": EXTERNAL_EXT_IP,
         "image": FS_IMAGE,
         "image_source": FS_IMAGE_SOURCE,
-        "skip_sip_test": SKIP_SIP_TEST,
+        "skip_sip_test": SKIP_SIP_TEST or args.skip_sip_test,
         "outbound_test_number": OUTBOUND_TEST_NUMBER,
+        "sim_register_gateway": not args.no_sim_register_gateway,
     }
 
     ssh_client = None
     try:
+        if args.update_users_only and args.dry_run:
+            # dry-run 仅本地打印生成计划，无需建立 SSH 连接
+            update_users_only(None, config, dry_run=True)
+            return
         ssh_client = create_ssh_client(REMOTE_HOST, SSH_PORT, SSH_USER, SSH_PASSWORD)
-        run_deployment(ssh_client, config)
+        if args.update_users_only:
+            update_users_only(ssh_client, config, dry_run=args.dry_run)
+        else:
+            run_deployment(ssh_client, config)
     except KeyboardInterrupt:
         log_error("用户中断部署")
         sys.exit(1)

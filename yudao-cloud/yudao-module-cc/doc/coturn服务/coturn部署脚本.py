@@ -18,10 +18,10 @@ import sys
 import time
 
 # ==================== 远程服务器常量 ====================
-REMOTE_HOST = "39.107.224.184"
+REMOTE_HOST = "<B服务器公网>"
 SSH_PORT = 22
-SSH_USER = "root"
-SSH_PASSWORD = "Moqi147852369"
+SSH_USER = "<账户>"
+SSH_PASSWORD = "<密码>"
 
 # ==================== coturn 部署常量 ====================
 # coturn 官方镜像（单实例部署，容器名固定为 coturn，不使用随机后缀）
@@ -54,14 +54,14 @@ UDP_PORTS_TO_CHECK = [LISTENING_PORT, TLS_LISTENING_PORT]
 # 认证域名（realm），TURN 客户端需使用相同 realm 才能通过认证
 REALM = "yudao-cc.com"
 # 长期凭证机制用户名:密码（lt-cred-mech 启用后使用）
-TURN_USER = "yudao-cc"
-TURN_PASSWORD = "yudao-cc"
+TURN_USER = "<账户>"
+TURN_PASSWORD = "<密码>"
 
 # ==================== NAT / 中继地址常量 ====================
 # 云服务器公网 IP（对外通告，TURN 客户端通过该地址连接中继）
-PUBLIC_IP = "39.107.224.184"
+PUBLIC_IP = "<B服务器公网>"
 # 云服务器内网 IP（中继绑定地址；NAT 环境下 turnserver 必须显式指定，否则中继地址解析错误）
-PRIVATE_IP = "10.0.0.127"
+PRIVATE_IP = "<B服务器内网>"
 # external-ip 配置值：公网IP/内网IP（coturn 用于 NAT 环境通告可被客户端访问的中继地址）
 EXTERNAL_IP = "%s/%s" % (PUBLIC_IP, PRIVATE_IP)
 
@@ -449,7 +449,7 @@ def update_turnserver_conf(ssh_client, default_config):
     content = conf_set_value(content, "user", "%s:%s" % (TURN_USER, TURN_PASSWORD))
     content = conf_set_value(content, "log-file", "/var/log/turnserver.log")
     # NAT 环境（云厂商 NAT 模式，公网 IP 绑定在 lo）：必须显式配置 external-ip 与 relay-ip，
-    # 否则 turnserver 只能探测到内网 IP（10.0.0.127），向客户端通告的中继地址为内网地址，
+    # 否则 turnserver 只能探测到内网 IP（<B服务器内网>），向客户端通告的中继地址为内网地址，
     # 客户端（浏览器软电话等）无法连接中继，TURN 分配失败。
     # external-ip=公网IP/内网IP：通告可被客户端访问的中继地址
     # relay-ip=内网IP：中继 socket 绑定内网地址

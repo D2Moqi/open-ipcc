@@ -12,7 +12,8 @@
 使用方式(系统 python3.11 直跑, 无 venv):
     python3 cc_e2e_test.py                          # 默认执行场景 1,2,3,5,6,7(有头)
     python3 cc_e2e_test.py --headless               # 无头模式(CI 友好)
-    python3 cc_e2e_test.py --scenarios 1,6          # 只执行指定场景(8/9 也须显式指定)
+    python3 cc_e2e_test.py --scenarios 1,6          # 只执行指定场景(8/9/10/11 也须显式指定)
+    python3 cc_e2e_test.py --scenarios 11 --rounds 1  # 并发呼入压测轻量版(10/20 两级)
     python3 cc_e2e_test.py --rounds 2 --round-backoff 10   # 每场景失败重试 2 轮, 轮间隔 10s
     python3 cc_e2e_test.py --skip-l0                # 跳过 L0 环境/数据核对
     python3 cc_e2e_test.py --auto-fix               # L0 数据缺失时执行幂等 INSERT 修复(默认关闭)
@@ -53,8 +54,8 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("cc_e2e")
 
 # ==================== 常量(环境事实,与 common/config.py 对齐) ====================
-# 远端后端日志路径(线上后端运行于 62.234.191.165, 日志落盘在该路径)
-REMOTE_JAVA_LOG_PATH = "/home/ubuntu/cc/logs/yudao-server.log"
+# 远端后端日志路径(线上后端运行于 <A服务器公网>, 日志落盘在该路径)
+REMOTE_JAVA_LOG_PATH = "/home/<账户>/cc/logs/yudao-server.log"
 # 清理用 Redis key 前缀(与后端 RedisConstants 一致)
 CLEANUP_REDIS_PATTERNS = ("autocall:task:*", "fs:ivr:instances:*", "statemachine:*")
 # cc_autocall_task_record.status 语义(AutocallTaskRecordServiceImpl 实测)
@@ -62,10 +63,10 @@ AUTOCALL_RECORD_STATUS_TEXT = {0: "待呼叫", 1: "呼叫中", 2: "已接通", 3
 # 可用的前端地址: 线上环境统一走 config.LOCAL_FRONTEND_URL(合法证书域)
 FRONTEND_CANDIDATE_URLS = (config.LOCAL_FRONTEND_URL,)
 
-# 场景默认执行顺序(scenario 4 已并入新场景3;8/9 可选项需 --scenarios 显式指定)
+# 场景默认执行顺序(scenario 4 已并入新场景3;8/9/10/11 可选项需 --scenarios 显式指定)
 DEFAULT_SCENARIOS = [1, 2, 3, 5, 6, 7]
 # 合法场景编号集合(未知编号如 4 立即报错退出码 2 并提示并入关系)
-VALID_SCENARIOS = {1, 2, 3, 5, 6, 7, 8, 9, 10}
+VALID_SCENARIOS = {1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13}
 
 
 # ==================== 步骤结果记录 ====================
@@ -1054,8 +1055,8 @@ def scenario_3_inbound_ivr(ctx: dict, recorder: StepRecorder) -> bool:
     场景3: 入局IVR全面版(pjsua 18600000000 呼 4001234 → tl101 全链路转坐席组)。
 
     需求背景: 覆盖原全场景场景3(ESL originate 模拟入局)与场景4(第三方FS 呼入)的完整
-    外部呼入信令链路——pjsua 软电话注册于第三方 FS(62.234.191.165:9988), 真实呼叫
-    sip:4001234@62.234.191.165:5561(sipproxy 公网入局), 比 ESL originate 更真实。
+    外部呼入信令链路——pjsua 软电话注册于第三方 FS(<A服务器公网>:9988), 真实呼叫
+    sip:4001234@<A服务器公网>:5561(sipproxy 公网入局), 比 ESL originate 更真实。
     flow101 主链: receive 收号 → 判断器1(IF result==1) → 放音 → method(1) → 判断器2
     → transfer(routeType=4 坐席组1, 组内任一就绪坐席随机接听) → end。
 
@@ -2087,6 +2088,297 @@ def scenario_10_ai_dialogue(ctx: dict, recorder: StepRecorder) -> bool:
     return recorder.all_passed
 
 
+# ==================== 场景11(可选): 并发呼入压测(轻量接入) ====================
+def scenario_11_concurrent_inbound(ctx: dict, recorder: StepRecorder) -> bool:
+    """
+    场景11(可选): 并发呼入压测轻量接入(默认 10/20 两级, 完整分级/排队请用独立脚本)。
+
+    需求背景: 完整并发压测(10/20/…/100 分级 + 排队子测试 + 报告)由独立脚本
+    cc_concurrent_test.py 承担; 本场景为在主脚本 `--scenarios 11` 显式指定时的轻量
+    入口, 复用当前已登录的 1001/1002 坐席并补齐 1003, 验证: 坐席状态更新/空闲坐席
+    重复分配/溢出分支行为三组断言, 输出分级报告到 reports/ 目录。
+    仅当 --scenarios 显式包含 11 时执行; 建议配合 --rounds 1(压测无重试语义)。
+    """
+    # 延迟 import: 避免模块顶层循环依赖(cc_concurrent_test 顶层 import 本模块)
+    import cc_concurrent_test as concurrent_impl
+
+    levels = [10, 20]
+    # 轮前置: 坐席就绪确认(场景函数内部再确认)
+    cleanup_calls(ctx["esl"], ctx["esl2"], ctx["browser"],
+                  [ctx.get("page_a"), ctx.get("page_b"), ctx.get("page_c")])
+    recorder.record("场景11-并发呼入压测(%d/%d 两级, 完整版请用独立脚本)" % (levels[0], levels[1]), True)
+    ok = concurrent_impl.run_levels_light(ctx, recorder, levels=levels, queue_test=False)
+    return ok and recorder.all_passed
+
+
+# ==================== 场景12(可选): 注册网关呼入(flow108) ====================
+def _register_gw_binding_exists(ctx: dict) -> bool:
+    """
+    前置校验: 注册模式网关(46) 的 Redis 注册绑定是否存在。
+
+    需求背景: 场景12/13 依赖 fs3(模拟4G网关) 以 gw1001 账号向 sipproxy 成功
+    REGISTER(绑定 key ipcc:sipproxy:gateway:register:46), 注册缺失时链路必然失败,
+    提前给出可操作提示而非盲目等待超时。
+    """
+    try:
+        val = ctx["redis"].client.get("ipcc:sipproxy:gateway:register:%s" % config.REGISTER_GW_ID)
+        if not val:
+            return False
+        logger.info("[前置] 注册绑定存在: %s", val)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[前置] 注册绑定查询异常: %s", exc)
+        return False
+
+
+def scenario_12_register_gw_inbound(ctx: dict, recorder: StepRecorder) -> bool:
+    """
+    场景12(可选): 注册模式网关呼入 — pjsua(模拟外部手机,注册于 fs3 9988) 呼 4005678
+    → fs3 dialplan outbound_to_gateway → sipproxy 按注册绑定识别 → 路由108 → flow108 转坐席组1。
+
+    需求背景: 验证注册型 4G 网关呼入——呼入来源识别经 REGISTER 绑定层(第 0.5/2.5 层)正确归类为
+    THIRD_PARTY, 命中 route108(^4005678$ 呼入) → flow108 直接转坐席组1 → 坐席接听。
+    前置条件: fs3 sim-4g-gateway 已 REGOK(Redis 绑定存在); pjsua 软电话A 在线。
+    """
+    browser, page_a, page_b = ctx["browser"], ctx["page_a"], ctx["page_b"]
+    sip_a = ctx["sip_a"]
+    db = ctx["db"]
+    _scenario_prepare(ctx, recorder, lambda c: _pages(c))
+    scenario_start = ctx["scenario_start"]
+    s12_buf = ctx["s_buf"]
+    log_tail = ctx["log_tail"]
+    spec = FLOW_SPECS["108"]
+    dial_number = config.REGISTER_GW_INBOUND_NUMBER
+
+    # 步骤1: 前置校验注册绑定(fs3 模拟网关注册成功, Redis key 存在)
+    if not recorder.record("场景12-前置: 网关%s注册绑定存在" % config.REGISTER_GW_NAME,
+                           _register_gw_binding_exists(ctx)):
+        logger.warning("[前置] 注册绑定缺失, 请检查 fs3 sim-4g-gateway 是否 REGOK")
+        return False
+
+    # 步骤2: pjsua 呼叫 fs3 网关号码(经 fs3 dialplan 转发 sipproxy 5561, 与线上 4G 网关呼入同链路)
+    target_uri = "sip:%s@%s:%s" % (dial_number, config.THIRD_PARTY_FS_HOST,
+                                    config.THIRD_PARTY_FS_SIP_PORT)
+    recorder.record("场景12-发起呼叫 %s -> %s" % (sip_a.username, target_uri), True)
+    sip_a.call(target_uri)
+    state = sip_a.wait_call_state(timeout=90, states=("CONNECTED", "DISCONNECTED"))
+    if not recorder.record("场景12-呼叫接通(IVR 应答)", state == CallState.CONNECTED,
+                           "呼叫状态=%s" % state):
+        return False
+
+    # 步骤3: sipproxy 来源识别断言(呼入 INVITE 识别为 THIRD_PARTY 后走呼入路由)
+    # 注意: identifySource 的"命中网关注册绑定"为 DEBUG 级日志,生产 INFO 级不输出,
+    # 以 INFO 级"消息来源=THIRD_PARTY"为证(与路由108 命中共同验证注册绑定识别链路)
+    reg_hits, _ = wait_log_keywords(
+        log_tail,
+        [re.compile(r"消息来源.{0,40}source=THIRD_PARTY.{0,40}method=INVITE"),
+         re.compile(r"命中网关注册绑定")],
+        timeout=20, min_match=1, buf=s12_buf)
+    recorder.record("场景12-sipproxy 识别为 THIRD_PARTY(注册绑定链路)", reg_hits >= 1,
+                    "命中注册相关关键词=%d" % reg_hits)
+    route_hits, _ = wait_log_keywords(
+        log_tail, [re.compile(r"\[进入callRoute电话\].{0,60}%s" % re.escape(dial_number)),
+                   re.compile(r"\[进入callRoute电话\]")],
+        timeout=30, min_match=1, buf=s12_buf)
+    recorder.record("场景12-路由108命中(%s)" % dial_number, route_hits >= 1)
+
+    # 步骤4: flow108 执行(转坐席组1)
+    grp_hits, _ = wait_log_keywords(
+        log_tail, [re.compile(r"\[转坐席组\]"), re.compile(r"ivr-转接-转坐席组处理器")],
+        timeout=30, min_match=1, buf=s12_buf)
+    if not recorder.record("场景12-flow108 发起转坐席组(组1)", grp_hits >= 1):
+        _diagnose_inbound_failure(ctx["collectors"], "场景12转坐席组")
+        return False
+
+    # 步骤5: 坐席组来电接听(1001/1002 任一, 复用场景3 模式)
+    answer_page = None
+    incoming_deadline = time.time() + 60
+    while time.time() < incoming_deadline:
+        if page_a.query_selector(".incoming-dialog"):
+            answer_page = page_a
+            break
+        if page_b.query_selector(".incoming-dialog"):
+            answer_page = page_b
+            break
+        time.sleep(1)
+    answer_agent = "1001" if answer_page is page_a else ("1002" if answer_page is page_b else "未知")
+    if not recorder.record("场景12-坐席%s 收到转坐席组来电" % answer_agent, answer_page is not None):
+        browser.take_screenshot(page_a, "s12_no_incoming")
+        return False
+    answered = browser.answer_call(answer_page) and browser.wait_for_call_connected(answer_page, timeout=60000)
+    recorder.record("场景12-坐席%s 接听并建立通话" % answer_agent, answered)
+    if not answered:
+        browser.take_screenshot(answer_page, "s12_answer_failed")
+        return False
+    # 双向通话确认(软电话收流)
+    sip_a.reset_rx_stats()
+    rx_deadline, rx_bytes = time.time() + 15, 0
+    while time.time() < rx_deadline:
+        rx_bytes = sip_a.get_rx_bytes()
+        if rx_bytes > 0:
+            break
+        time.sleep(1)
+    ui_duration = browser.get_call_duration(answer_page)
+    recorder.record("场景12-双向通话(软电话 rxBytes 增长)", rx_bytes > 0,
+                    "rxBytes=%d, UI计时=%s" % (rx_bytes, ui_duration))
+
+    # 步骤6: 软电话挂断, 坐席侧联动挂断
+    sip_a.hangup()
+    sip_disc = sip_a.wait_call_state(timeout=20, states=("DISCONNECTED",))
+    recorder.record("场景12-18600000000 挂断", sip_disc == CallState.DISCONNECTED)
+    hup_t0 = time.time()
+    ended = browser.wait_for_call_ended(answer_page, timeout=30000)
+    hup_elapsed = time.time() - hup_t0
+    recorder.record("场景12-坐席侧自动挂断(≤15s)", ended and hup_elapsed <= 15.0,
+                    "实际耗时=%.1fs" % hup_elapsed)
+
+    # 步骤7: DB 校验(主叫=pjsua 号码, 被叫=4005678, flow108 终态)
+    def _cdr_row():
+        return db.query("SELECT id, call_id, caller_number, callee_number, direction, "
+                        "call_state, call_type, answer_flag, call_start_time, call_end_time "
+                        "FROM cc_call_record WHERE deleted=0 AND caller_number=%s "
+                        "AND create_time >= %s ORDER BY id DESC LIMIT 1",
+                        (sip_a.username, scenario_start))
+
+    cdr = poll_until(_cdr_row, timeout=40)
+    cdr_row = cdr[0] if cdr else None
+    recorder.record("场景12-cc_call_record 生成(主叫%s)" % sip_a.username, cdr_row is not None,
+                    str(cdr) if cdr else "未找到记录")
+    if cdr_row:
+        recorder.record("场景12-cc_call_record direction=1(呼入)",
+                        int(cdr_row.get("direction") or 0) == 1,
+                        "direction=%s" % cdr_row.get("direction"))
+        recorder.record("场景12-cc_call_record answer_flag=1(已接听)",
+                        int(cdr_row.get("answer_flag") or 0) == 1,
+                        "answer_flag=%s" % cdr_row.get("answer_flag"))
+
+    def _flow_ended():
+        inst = get_latest_flow_instance(db, spec["flow_id"], scenario_start)
+        return inst if _flow_ended_predicate(inst) else None
+
+    flow_inst = poll_until(_flow_ended, timeout=30)
+    recorder.record("场景12-cc_flow_instances(flow108)终态", flow_inst is not None,
+                    ("status=%s end_time=%s call_id=%s" %
+                     (flow_inst.get("status"), flow_inst.get("end_time"), flow_inst.get("call_id")))
+                    if flow_inst else "30s内未写入终态")
+    return recorder.all_passed
+
+
+# ==================== 场景13(可选): 注册网关呼出(flow109) ====================
+def scenario_13_register_gw_outbound(ctx: dict, recorder: StepRecorder) -> bool:
+    """
+    场景13(可选): 注册模式网关呼出 — 坐席A 拨 8#18600000000 选网关46(注册模式4G网关)
+    → FS originate(X-Gateway-Id=46) → sipproxy 呼出目标解析命中注册绑定(注册 Contact > 静态)
+    → INVITE→fs3:9977(注册 Contact) → fs3 dialplan inbound 186 路由 bridge user → pjsua 接听。
+
+    需求背景: 验证注册型网关呼出时 sipproxy 不依赖静态 address(网关46 address 为空),
+    而是按 GatewayRegistry 绑定获取可达地址(<A服务器内网>:9977, external profile 通告内网)。拨号前缀 8#(非 0#,
+    避免与 route105 冲突) 命中 route109 → flow109(转外呼 routeValue=46)。
+    前置条件: fs3 模拟网关注册成功; 坐席A 就绪; pjsua 软电话A 在线。
+    """
+    browser, page_a = ctx["browser"], ctx["page_a"]
+    sip_a = ctx["sip_a"]
+    db = ctx["db"]
+    _scenario_prepare(ctx, recorder, lambda c: _pages(c))
+    scenario_start = ctx["scenario_start"]
+    s13_buf = ctx["s_buf"]
+    log_tail = ctx["log_tail"]
+    spec = FLOW_SPECS["109"]
+    target = config.THIRD_PARTY_AGENT_NUMBER  # 18600000000
+    dial = config.IVR_DIAL_PREFIX_REGISTER_GW + target  # 8#18600000000
+
+    # 步骤1: 前置校验注册绑定
+    if not recorder.record("场景13-前置: 网关%s注册绑定存在" % config.REGISTER_GW_NAME,
+                           _register_gw_binding_exists(ctx)):
+        logger.warning("[前置] 注册绑定缺失, 请检查 fs3 sim-4g-gateway 是否 REGOK")
+        return False
+
+    # 步骤2: 坐席A 发起出局呼叫 8#18600000000(前缀路由109 → flow109 转网关46)
+    if not recorder.record("场景13-坐席A发起出局呼叫 %s(网关%s)" % (dial, config.REGISTER_GW_NAME),
+                           browser.make_call(page_a, dial, gateway_name=config.REGISTER_GW_NAME)):
+        take_screenshot_on_failure(browser, page_a, "scenario_13_call")
+        return False
+
+    # 步骤3: 软电话A 等待来电并接听(fs3 9977 收到 INVITE → bridge user 18600000000)
+    if not recorder.record("场景13-%s 收到外呼来电" % target, sip_a.wait_incoming(timeout=90)):
+        take_screenshot_on_failure(browser, page_a, "scenario_13_no_incoming")
+        return False
+    sip_a.reset_rx_stats()
+    sip_a.answer()
+    state = sip_a.wait_call_state(timeout=60, states=("CONNECTED", "DISCONNECTED"))
+    if not recorder.record("场景13-%s 接听并建立通话" % target, state == CallState.CONNECTED,
+                           "呼叫状态=%s" % state):
+        return False
+
+    # 步骤4: UI 通话中 + 后端日志断言(注册绑定命中 + 删除前缀归一化)
+    deadline = time.time() + 25
+    status_a = ""
+    while time.time() < deadline:
+        status_a = browser.get_status_text(page_a)
+        if "通话中" in status_a:
+            break
+        time.sleep(1)
+    recorder.record("场景13-坐席A UI 通话中", "通话中" in status_a, "A=%s" % status_a)
+    bind_hits, _ = wait_log_keywords(
+        log_tail,
+        [re.compile(r"forwardToOutboundGateway.{0,40}命中注册绑定"),
+         re.compile(r"命中注册绑定")],
+        timeout=20, min_match=1, buf=s13_buf)
+    recorder.record("场景13-sipproxy 呼出命中注册绑定(gatewayId=%s)" % config.REGISTER_GW_ID,
+                    bind_hits >= 1, "命中关键词数=%d" % bind_hits)
+    delete_hits, _ = wait_log_keywords(
+        log_tail,
+        [re.compile(r"\[删除前缀\].{0,40}%s" % re.escape(dial)),
+         re.compile(r"\[删除前缀\].{0,40}%s" % re.escape(target))],
+        timeout=20, min_match=1, buf=s13_buf)
+    recorder.record("场景13-后端日志: [删除前缀] %s→%s" % (dial, target), delete_hits >= 1,
+                    "命中关键词数=%d" % delete_hits)
+
+    # 步骤5: RTP 收流 + 通话保持 6s 后挂断
+    rx_deadline, rx_bytes = time.time() + 15, 0
+    sip_a.reset_rx_stats()
+    while time.time() < rx_deadline:
+        rx_bytes = sip_a.get_rx_bytes()
+        if rx_bytes > 0:
+            break
+        time.sleep(1)
+    recorder.record("场景13-软电话 RTP 收流(rxBytes增量>0)", rx_bytes > 0, "rxBytes=%d" % rx_bytes)
+    time.sleep(6)
+    recorder.record("场景13-坐席A挂断", browser.hangup(page_a))
+    browser.wait_for_call_ended(page_a, timeout=15000)
+
+    # 步骤6: DB 校验(gateway_id=46 + flow109 终态)
+    def _cdr_row():
+        return db.query("SELECT id, call_id, caller_number, callee_number, direction, "
+                        "call_state, call_type, answer_flag, gateway_id, call_start_time, call_end_time "
+                        "FROM cc_call_record WHERE deleted=0 AND callee_number=%s "
+                        "AND create_time >= %s ORDER BY id DESC LIMIT 1",
+                        (target, scenario_start))
+
+    cdr = poll_until(_cdr_row, timeout=40)
+    cdr_row = cdr[0] if cdr else None
+    recorder.record("场景13-cc_call_record 生成(被叫%s)" % target, cdr_row is not None,
+                    str(cdr) if cdr else "未找到记录")
+    if cdr_row:
+        recorder.record("场景13-cc_call_record gateway_id=46(注册模式网关)",
+                        str(cdr_row.get("gateway_id") or "") == str(config.REGISTER_GW_ID),
+                        "gateway_id=%s" % cdr_row.get("gateway_id"))
+        recorder.record("场景13-cc_call_record answer_flag=1(已接听)",
+                        int(cdr_row.get("answer_flag") or 0) == 1,
+                        "answer_flag=%s" % cdr_row.get("answer_flag"))
+
+    def _flow_ended():
+        inst = get_latest_flow_instance(db, spec["flow_id"], scenario_start)
+        return inst if _flow_ended_predicate(inst) else None
+
+    flow_inst = poll_until(_flow_ended, timeout=30)
+    recorder.record("场景13-cc_flow_instances(flow109)终态", flow_inst is not None,
+                    ("status=%s end_time=%s call_id=%s" %
+                     (flow_inst.get("status"), flow_inst.get("end_time"), flow_inst.get("call_id")))
+                    if flow_inst else "30s内未写入终态")
+    return recorder.all_passed
+
+
 # ==================== 场景注册表(模块级, runner 按编号调度) ====================
 SCENARIOS = {
     1: ("场景1_内部呼叫", scenario_1_internal_call),
@@ -2098,6 +2390,9 @@ SCENARIOS = {
     8: ("场景8_客服组繁忙(可选)", scenario_8_group_busy),
     9: ("场景9_满意度评价(可选)", scenario_9_satisfaction),
     10: ("场景10_AI对话(可选)", scenario_10_ai_dialogue),
+    11: ("场景11_并发呼入(可选)", scenario_11_concurrent_inbound),
+    12: ("场景12_注册网关呼入(可选)", scenario_12_register_gw_inbound),
+    13: ("场景13_注册网关呼出(可选)", scenario_13_register_gw_outbound),
 }
 
 

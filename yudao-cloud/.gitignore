@@ -54,8 +54,11 @@ application-my.yaml
 __pycache__/
 *.pyc
 
-# 测试失败截图(自动生成, 不入库)
+# 测试相关
 yudao-module-cc/doc/test-all/screenshots/
+yudao-module-cc/doc-prod/test-all/screenshots/
+yudao-module-cc/doc/test-all/reports/
+yudao-module-cc/doc-prod/test-all/reports/
 
 /yudao-ui-app/unpackage/
 .DS_Store

@@ -1,9 +1,12 @@
 # SIP通信系统信令与话务流程方案
 
-> **版本**：v3.0  **生效日期**：2026-07-22
+> **版本**：v4.0　 **生效日期**：2026-09-02
 > **适用范围**：yudao-cloud-cc 呼叫中心（cc）模块
 > **核心设计原则**： **所有 INVITE 必须经过号码路由表正则匹配 → IVR 流程 → IVR 转接节点驱动后续行为**；网关 ID 仅作为 IVR
 > 转接节点（routeType=2 外呼）的覆盖项。
+> **验证事实源**：本文场景体系与 `test-all` 端到端测试套件（`cc_e2e_test.py`、`common/data_spec.py`、`common/config.py`
+> ）一一对应；
+> 路由/流程/节点/断言真值以 `test-all/common/data_spec.py` 的 FLOW_SPECS（route/flow 101-109）为准。
 
 ***
 
@@ -12,14 +15,24 @@
 本方案定义 yudao-cloud-cc 呼叫中心 SIP 通信系统的：
 
 - 系统组件角色定位与架构模式
-- 核心设计原则（号码分析驱动路由 + 网关 ID 覆盖）
-- 7 类核心业务场景的端到端信令与媒体流程
+- 核心设计原则（号码分析驱动路由 + 网关 ID 覆盖 + 注册绑定识别）
+- 12 个端到端测试场景（编号 1-13，场景 4 已并入场景 3）的信令与媒体流程
+- 通话记录（CDR）与录音绑定机制
 - 异常场景处理与可靠性保障
 - 生产环境必需的 SIP 补充机制
 - 号码路由表配置规范
-- 已知遗留问题与未来演进方向
 
 阅读对象：cc 模块开发、测试、运维、SRE 工程师，以及对接运营商/第三方网关的集成方工程师。
+
+### 1.1 v3.0 → v4.0 变更摘要（2026-09-02）
+
+| 变更项                | 说明                                                                                                                                                                                                                |
+|-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 场景体系对齐 test-all | 场景编号改用测试套件编号 1-13（12 个实现场景；场景 4 并入场景 3，见第五章对照表）；新增场景 5（保持/恢复）、8（客服组繁忙）、9（满意度评价）、10（AI 对话）、11（并发呼入压测）、12/13（注册模式 4G 网关呼入/呼出） |
+| 图表全部 Mermaid 化   | 原 ASCII 时序图全部替换为 Mermaid（sequenceDiagram / flowchart），并抽取公共呼叫建立时序（3.6 节）供各场景复用                                                                                                      |
+| 旧场景降级说明        | v3.0 的场景四（三方会议）、场景五（双向出局/中继透传）**代码已实现但无 e2e 自动化覆盖**，本文不再设独立场景章，机制说明并入 3.5 豁免场景清单与第十章转接边界                                                        |
+| 事实修正              | 通话记录矩阵（v3.0 第十章 10.6）场景二/三命名漂移已修正；路由示例更新为库中真值 101-109                                                                                                                             |
+| 新增机制章节          | 注册模式网关（REGISTER 绑定识别）信令路径、保持/恢复边界、AI 对话节点链路                                                                                                                                           |
 
 ***
 
@@ -27,43 +40,48 @@
 
 四个核心组件在系统中的职责：
 
-| 组件                     | 角色                       | 关键职责                                                                                                                                                                                                               |
-|--------------------------|----------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **JSSIP客户端**          | UA（User Agent）           | 浏览器/Web 端坐席软电话，发起/接收呼叫，处理本地媒体（WebRTC）。**所有坐席均注册在 SIP 代理服务上**                                                                                                                    |
-| **SIP代理服务**          | B2BUA（背靠背用户代理）    | **系统信令核心与控制大脑**。负责坐席注册管理、认证鉴权、请求路由、协议转换（WebSocket↔UDP/TCP）、网关选路、**通过 ESL 全权控制 FreeSWITCH 的呼叫逻辑**。是所有信令的必经节点                                           |
-| **FreeSWITCH服务器**     | Media Server（"哑"媒体层） | **仅负责媒体处理，是纯粹的被动执行者**。媒体协商、录音、转码、DTMF 收号、会议混音。收到 INVITE 后立即 park 住，等待 ESL 指令。**不配置任何 dialplan 业务逻辑**；系统中存在多台实例；不负责坐席注册，不参与信令路由决策 |
-| **第三方FreeSWITCH网关** | 出局/入局网关              | 对接运营商/PSTN/外部 SIP 网络，完成内部 SIP 与外部电话网络的互通。由网关 ID（FsSipGatewayDO）标识                                                                                                                      |
+| 组件                  | 角色                       | 关键职责                                                                                                                                                                                                                              |
+|-----------------------|----------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **JsSIP 客户端**      | UA（User Agent）           | 浏览器/Web 端坐席软电话，发起/接收呼叫，处理本地媒体（WebRTC）。**所有坐席均注册在 SIP 代理服务上**                                                                                                                                   |
+| **SIP 代理服务**      | B2BUA（背靠背用户代理）    | **系统信令核心与控制大脑**。负责坐席注册管理、认证鉴权、请求路由、协议转换（WebSocket↔UDP/TCP）、网关选路、**通过 ESL 全权控制 FreeSWITCH 的呼叫逻辑**。是所有信令的必经节点                                                          |
+| **FreeSWITCH 服务器** | Media Server（"哑"媒体层） | **仅负责媒体处理，是纯粹的被动执行者**。媒体协商、录音、转码、DTMF 收号、会议混音。收到 INVITE 后立即 park 住，等待 ESL 指令。**不配置任何 dialplan 业务逻辑**；系统中存在多台实例（fs1/fs2/fs3）；不负责坐席注册，不参与信令路由决策 |
+| **第三方 FS/网关**    | 出局/入局网关              | 对接运营商/PSTN/外部 SIP 网络，完成内部 SIP 与外部电话网络的互通。分为两类：**静态网关**（由 FsSipGatewayDO 的 address 配置标识）与**注册模式网关**（如 4G 语音网关，REGISTER 后由代理记录注册 Contact 作为可达地址，address 可空）   |
 
-### 关键架构说明
+### 2.1 关键架构说明
 
-```
-                    ┌──────────────────────────────────────────────┐
-                    │              SIP 代理服务（信令核心+控制大脑）   │
-                    │  ┌──────────────────────────────────────────┐ │
-  WebSocket(WSS)    │  │ • 坐席注册管理（所有 JSSIP 坐席注册于此）  │ │
- ┌────────────┐     │  │ • 认证鉴权（Digest/Token/IP 白名单）     │ │
- │ JSSIP客户端│◄───►│  │ • 请求路由（号码路由匹配+IVR 驱动）       │ │     ESL
- │ (浏览器坐席)│     │  │ • ESL 全权控制 FS（originate/bridge/IVR） │ │◄──────►┌────────────────┐
- └────────────┘     │  │ • 协议转换（WebSocket↔UDP/TCP）         │ │  SIP   │ FreeSWITCH #1  │
-                    │  │ • SDP 协商协调（指定 FS 作为媒体中继）     │ │◄──────►│  (哑媒体服务)   │
-                    │  └──────────────────────────────────────────┘ │  RTP   └────────────────┘
-                    │                      │ SIP                    │
-                    │                      ▼                        │     ESL
-                    │              ┌────────────────┐               │◄──────►┌────────────────┐
-                    │              │ 第三方 FS 网关   │               │  SIP   │ FreeSWITCH #2  │
-                    │              │ (出局/入局)    │               │◄──────►│  (哑媒体服务)   │
-                    │              └────────────────┘               │  RTP   └────────────────┘
-                    └──────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph UA["坐席侧（浏览器）"]
+        A["坐席A JsSIP 软电话<br/>分机 1001/1002/1003"]
+    end
+    subgraph SP["SIP 代理服务（信令核心 + 控制大脑）"]
+        R1["坐席注册管理（所有 JsSIP 坐席注册于此）"]
+        R2["认证鉴权（Digest/Token/IP 白名单）"]
+        R3["请求路由（号码路由匹配 + IVR 驱动）"]
+        R4["REGISTER 绑定识别（注册模式网关 → 可达地址）"]
+        R5["ESL 全权控制 FS（originate/bridge/IVR）"]
+        R6["协议转换（WebSocket ↔ UDP/TCP）"]
+        R7["SDP 协商协调（指定 FS 作为媒体中继）"]
+    end
+    subgraph MED["媒体层（哑媒体服务器）"]
+        F1["FreeSWITCH fs1/fs2<br/>（内部实例，媒体锚定）"]
+        F2["第三方网关 / fs3（模拟运营商）<br/>与注册模式 4G 网关"]
+    end
+    A <-->|"WSS 注册 / SIP 信令"| SP
+    SP -->|"SIP UDP/TCP 转发 INVITE"| F1
+    SP <-->|"SIP 出局改写/呼入识别"| F2
+    SP -.->|"ESL 全权控制（事件+命令）"| F1
+    A -.->|"RTP（经 FS 中继 / TURN 兜底）"| F1
 ```
 
 > **架构模式说明**：本系统采用 **SIP 代理独立信令层 + ESL 全权控制** 架构。SIP 代理服务作为唯一的信令入口与路由核心，所有坐席均注册在
-> SIP 代理服务上。FreeSWITCH 仅作为"哑"媒体服务器——收到 INVITE 后立即 park 住，由 SIP 代理服务通过 ESL 监听 `CHANNEL_PARK`
-> 事件后接管控制，通过 ESL 命令（originate/uuid\_bridge 等）驱动 FS 完成第二段呼叫和媒体桥接。FS **不配置任何 dialplan
-业务逻辑**。系统中部署多台 FreeSWITCH 实例，每台通过地址（IP:port）标识。
+> SIP 代理服务上。FreeSWITCH 仅作为"哑"媒体服务器——收到 INVITE 后立即 park 住，由 SIP 代理服务（cc-server 侧 ESL 客户端）监听
+> `CHANNEL_PARK` 事件后接管控制，通过 ESL 命令（originate/uuid_bridge 等）驱动 FS 完成第二段呼叫和媒体桥接。FS **不配置任何
+> dialplan 业务逻辑**。系统中部署多台 FreeSWITCH 实例，每台通过地址（IP:port）标识。
 
-### B2BUA 角色定位说明
+### 2.2 B2BUA 角色定位说明
 
-SIP 代理服务在协议层面扮演的是 **B2BUA（Back-to-Back User Agent，背靠背用户代理）**，而非简单的 SIP Proxy。两者的本质区别如下：
+SIP 代理服务在协议层面扮演的是 **B2BUA（Back-to-Back User Agent，背靠背用户代理）**，而非简单的 SIP Proxy：
 
 | 维度             | SIP Proxy（代理）                        | B2BUA（背靠背用户代理）✅ 本系统角色                          |
 |------------------|------------------------------------------|---------------------------------------------------------------|
@@ -73,18 +91,21 @@ SIP 代理服务在协议层面扮演的是 **B2BUA（Back-to-Back User Agent，
 | **Record-Route** | 需添加自身到 Record-Route 以留在信令路径 | 天然位于两段对话中间，无需 Record-Route                       |
 | **适用场景**     | 简单路由代理                             | 需要深度控制信令、媒体锚定、业务逻辑                          |
 
-本系统的 B2BUA 特征体现为：
-
+```mermaid
+flowchart LR
+    subgraph D1["SIP 对话 1（Call-ID-1）"]
+        A["坐席A/网关"] --> SP["SIP 代理（B2BUA）"]
+    end
+    subgraph D2["SIP 对话 2（Call-ID-2）"]
+        SP --> T["坐席B/被叫坐席/网关"]
+    end
+    SP -.->|"ESL 控制"| F["FreeSWITCH（媒体）"]
+    A -.->|"RTP"| F
+    T -.->|"RTP"| F
 ```
-坐席A ←──SIP对话1（Call-ID-1）──→ SIP代理(B2BUA) ←──SIP对话2（Call-ID-2）──→ 坐席B/网关
-                                      │
-                                   ESL控制
-                                      │
-                                 FreeSWITCH(媒体)
-```
 
-- **第一段对话**：坐席A ↔ SIP 代理（INVITE 终结于 FS 的 park，Call-ID-1）
-- **第二段对话**：SIP 代理 ↔ 坐席B/网关（通过 ESL originate 发起新 INVITE，Call-ID-2）
+- **第一段对话**：主叫侧 ↔ SIP 代理（INVITE 终结于 FS 的 park，Call-ID-1）
+- **第二段对话**：SIP 代理 ↔ 被叫坐席/网关（通过 ESL originate 发起新 INVITE，Call-ID-2）
 - **两段对话独立**：不同的 Call-ID、From/To tag，BYE/Re-INVITE 等请求分别在各自对话内处理
 
 > **影响**：B2BUA 定位意味着 BYE 挂断、Re-INVITE（如 hold/unhold、Session Timer 刷新）等请求在两段对话中是 **独立事务**，由
@@ -92,1257 +113,1042 @@ SIP 代理服务在协议层面扮演的是 **B2BUA（Back-to-Back User Agent，
 
 ***
 
-## 三、核心设计原则：号码分析驱动路由 + 网关 ID 覆盖
+## 三、核心设计原则：号码分析驱动路由 + 网关 ID 覆盖 + 注册绑定识别
 
-SIP 代理服务的路由决策 **以号码分析为核心**：所有到达 SIP 代理的 INVITE 请求（ **包括内部坐席间呼叫**）必须经过号码路由表的正则匹配，匹配到对应
-IVR 流程后由 IVR 流程驱动后续呼叫行为。网关 ID 作为 IVR 转接节点的网关覆盖项。
+SIP 代理服务的路由决策 **以号码分析为核心**：所有到达 SIP 代理的 INVITE 请求（ **包括内部坐席间呼叫**）必须经过号码路由表的正则匹配，
+匹配到对应 IVR 流程后由 IVR 流程驱动后续呼叫行为。网关 ID 作为 IVR 转接节点的网关覆盖项；注册模式网关则按 REGISTER
+绑定识别来源与呼出目标。
 
 ### 3.1 三大设计要点
 
-1. **所有呼叫（含内部坐席间呼叫）必须走号码路由 + IVR，**，所有呼叫统一走号码路由→IVR→IVR 转接节点。
+1. **所有呼叫（含内部坐席间呼叫）必须走号码路由 + IVR**，统一走号码路由 → IVR → IVR 转接节点。
 2. **网关 ID 仅作为 IVR 转接节点的覆盖项**——优先级：`CallInfo.gatewayId`（来自 INVITE 头 `X-Gateway-Id`）>
    `IVR 转接节点 routeValue`（来自 IVR 配置）> 当前连接的 FS 兜底。
-3. **当前连接的 FS**——指 CHANNEL\_PARK 事件来源的 FS 实例（即当前正在处理该呼叫腿的 FS，代码层面即
+3. **当前连接的 FS**——指 CHANNEL_PARK 事件来源的 FS 实例（即当前正在处理该呼叫腿的 FS，代码层面即
    `FsCallIRouteProcess.handler` 的 `address` 参数）。
+4. **注册绑定识别**：注册模式网关（4G 语音网关，`register_enabled=1`）REGISTER 到代理后，代理在 Redis 记录
+   `ipcc:sipproxy:gateway:register:{gatewayId}` 绑定（注册 Contact 地址）；呼出时按「注册 Contact > 静态配置 address」解析出局目标，
+   **不依赖静态 address**（网关 46 即 address 为空）。
 
 ### 3.2 统一呼叫控制流程
 
-```
-INVITE 到达 SIP 代理服务
-│
-├── 提取 INVITE 头中的 X-Gateway-Id（如有）存入 SessionInfo/CallInfo
-│
-├── 转发 INVITE 到内部 FS（负载均衡选择） → FS park 住 → ESL 监听到 CHANNEL_PARK 事件
-│
-├── ESL 处理器读取被叫号码 + gatewayId（来自事件 variable_sip_h_X-Gateway-Id）
-│
-├── 号码路由表正则匹配（按 callType=1 呼入 / callType=2 呼出 区分）:
-│   ├── 调用 CallRouteService.getListByRouteNumberAndType(callee, direction)
-│   ├── 取 level 最高的路由条目
-│   └── 用其 flowId 驱动对应 IVR 流程
-│
-├── IVR 流程执行到转接节点（transfer-node）:
-│   ├── routeType=1（转坐席）→ ESL originate 发起第二段呼叫到目标坐席
-│   └── routeType=2（外呼）→ 按以下优先级确定出局网关 ID:
-│       ├── 优先级 1: CallInfo.gatewayId（INVITE 头携带）非空 → 使用它作为出局网关 ID
-│       ├── 优先级 2: IVR 转接节点 routeValue 非空 → 使用它作为出局网关 ID
-│       └── 优先级 3: 两者都为空 → 使用当前连接的 FS（CHANNEL_PARK 事件来源 FS）作为出局目标
-│
-└── IVR 转接节点通过 ESL originate 驱动 FS 发起第二段呼叫（回注到 SIP 代理）
-    └── 第二段 INVITE 回注到 SIP 代理 → 代理执行出局改写 → 转发到第三方网关
+```mermaid
+flowchart TD
+    A["INVITE 到达 SIP 代理"] --> B{"来源识别"}
+    B -->|"坐席(WebSocket)"| C["WsInviteRequestHandler: 提取 X-Gateway-Id<br/>存 SessionInfo/CallInfo"]
+    B -->|"第三方网关/注册网关(THIRD_PARTY)"| D["SipInviteRequestHandler: callType=INBOUND<br/>缓存 thirdPartyNode 响应方向"]
+    B -->|"FS 回注(FREESWITCH) 携带网关ID"| E["豁免分支: forwardToOutboundGateway<br/>直接出局改写（见 3.5）"]
+    B -->|"FS 回注(FREESWITCH) 无网关ID"| F["callType=INTERNAL<br/>再次 park（内部二段腿）"]
+    C --> G["转发 INVITE 到内部 FS（负载均衡选节点）"]
+    D --> G
+    F --> G
+    G --> H["FS park 住 → ESL 收到 CHANNEL_PARK"]
+    H --> I["读取被叫号码 + gatewayId（variable_sip_h_X-Gateway-Id）"]
+    I --> J["号码路由表正则匹配（callType=1 呼入 / 2 呼出）<br/>CallRouteService.getListByRouteNumberAndType"]
+    J -->|"匹配成功"| K["用 flowId 驱动 IVR 流程"]
+    J -->|"匹配失败"| X["playFile(SYSTEM_ERROR) + hangupCall<br/>告警: 号码未匹配到路由规则"]
+    K --> L{"IVR 执行到转接节点"}
+    L -->|"routeType=1 转坐席"| M["ESL originate 第二段呼叫到目标坐席"]
+    L -->|"routeType=2 外呼"| N["按 3.3 优先级确定出局网关 ID"]
+    N --> O["ESL originate 第二段呼叫（携网关 ID 或 FS 兜底）"]
+    M --> P["第二段 INVITE 回注 SIP 代理"]
+    O --> P
+    P --> Q["代理查询坐席注册位置 / 按注册绑定解析 / 出局改写"]
+    Q --> R["转发到被叫坐席（WebSocket）或第三方网关"]
+    R --> S["被叫应答 → ESL bridgeCall 桥接两腿"]
+    S --> T["FS 媒体锚定 → 通话建立"]
 ```
 
 ### 3.3 网关 ID 覆盖优先级
 
-| 优先级  | 网关 ID 来源                                            | 说明                                                                                               |
-|---------|---------------------------------------------------------|----------------------------------------------------------------------------------------------------|
-| 1（高） | `CallInfo.gatewayId`                                    | 来自 INVITE 头 `X-Gateway-Id`，业务侧显式指定，覆盖 IVR 配置                                       |
-| 2（中） | `IVR 转接节点 routeValue`（routeType=2 时）             | 来自 IVR 流程配置，作为兜底网关 ID                                                                 |
-| 3（低） | 当前连接的 FS（CHANNEL\_PARK 事件来源 FS 的 `address`） | 上述两者都为空时，使用当前正在处理该呼叫腿的 FS 实例，由其本地 sofia profile external 配置路由出局 |
+| 优先级  | 网关 ID 来源                                           | 说明                                                                                               |
+|---------|--------------------------------------------------------|----------------------------------------------------------------------------------------------------|
+| 1（高） | `CallInfo.gatewayId`                                   | 来自 INVITE 头 `X-Gateway-Id`，业务侧显式指定，覆盖 IVR 配置                                       |
+| 2（中） | `IVR 转接节点 routeValue`（routeType=2 时）            | 来自 IVR 流程配置，作为兜底网关 ID                                                                 |
+| 3（低） | 当前连接的 FS（CHANNEL_PARK 事件来源 FS 的 `address`） | 上述两者都为空时，使用当前正在处理该呼叫腿的 FS 实例，由其本地 sofia profile external 配置路由出局 |
 
 ### 3.4 关键约束与告警
 
-> **所有呼叫必须走号码路由 + IVR**：所有呼叫（包括内部坐席间呼叫、携带网关 ID
-> 的出局呼叫、入局呼叫、自动外呼）统一经过号码路由表正则匹配 → IVR 流程 → IVR 转接节点驱动后续呼叫行为。这保证了系统路由策略的统一性、可追溯性，所有呼叫都经过
-> IVR 流程的统一业务逻辑（录音、计费、CDR 等）。
+> **所有呼叫必须走号码路由 + IVR**：所有呼叫（包括内部坐席间呼叫、携带网关 ID 的出局呼叫、入局呼叫、自动外呼）统一经过号码路由表
+> 正则匹配 → IVR 流程 → IVR 转接节点驱动后续呼叫行为。这保证了系统路由策略的统一性、可追溯性，所有呼叫都经过 IVR 流程的统一业务逻辑
+> （录音、计费、CDR 等）。
 
 > **网关 ID 职责定位**：网关 ID 作为"IVR 转接节点的覆盖项"，仅在 routeType=2 外呼时生效。INVITE 中携带的 `X-Gateway-Id`
 > 会被存入 `CallInfo.gatewayId`，在 IVR 流程执行到转接节点时作为优先级最高的网关 ID 使用。
 
-> **当前连接的 FS 语义**：当 `CallInfo.gatewayId` 与 IVR 转接节点 `routeValue` 均为空时，使用当前正在处理该呼叫腿的 FS
-> 实例作为出局目标。具体指 **CHANNEL\_PARK 事件来源的 FS 实例**，代码层面即 `FsCallIRouteProcess.handler` 方法的 `address`
-> 参数。通过该 FS 的本地 sofia profile external 配置发起出局呼叫（不指定具体 gateway，由 FS 自身路由）。
+> **网关 ID 不得指向内部 FS**：网关 ID 必须指向第三方出局网关（`FsSipGatewayDO`），配置为内部 FS 地址会导致 INVITE 回环死循环；
+> 系统在网关配置与 IVR 转接节点配置时应做前置校验。
 
-> **⚠️ 网关 ID 不能设置为内部 FS 地址**：该约束必须严格遵守。如果 `CallInfo.gatewayId` 或 IVR 转接节点 `routeValue`
-> 恰好等于某台内部 FreeSWITCH 的服务地址（如 fs1=10.0.0.10:5060），会导致 **INVITE 回环死循环**：
->
-> 1. IVR 转接节点通过 ESL originate 驱动 FS 发第二段 INVITE，携带 `X-Gateway-Id: fs1`
-> 2. SIP 代理收到后查网关 ID 表 → 目标=10.0.0.10:5060（FS 自己）
-> 3. SIP 代理把 INVITE 转发回 FS → FS 又收到 INVITE → 又 park 住 → 又触发 CHANNEL\_PARK 事件
-> 4. SIP 代理又收到 park 事件 → 又走号码路由 → IVR → ESL originate → 无限循环
->
-> 因此， **配置网关 ID 时必须确保其指向的是第三方出局网关（FsSipGatewayDO）而非内部 FS 实例**。系统应在网关配置与 IVR
-> 转接节点配置时进行校验，拒绝将内部 FS 地址配置为网关 ID。
+### 3.5 豁免场景与直发场景清单
 
-> **号码路由表配置要求**：由于所有呼叫必须经过号码路由匹配，号码路由表必须配置至少一条规则。推荐配置默认兜底规则 `.*` 指向默认
-> IVR 流程，避免未匹配到规则的呼叫被挂断。详细配置规范见附录"号码路由表配置规范"。
+以下场景 **不走号码路由 + IVR**（或不经 sipproxy INVITE 转发），由 `SipInviteRequestHandler` 或业务层直接控制出局：
 
-### 3.5 三个豁免场景（保留 ESL originate 直接出局能力）
+| # | 场景                                  | 触发形态                                                                                   | 处理路径                                                                                                | e2e 覆盖                                 |
+|---|---------------------------------------|--------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------|------------------------------------------|
+| 1 | 三方会议 c-leg（旧场景四）            | ESL originate 携 `X-Gateway-Id`，FS 回注                                                   | `source=FREESWITCH && gatewayId 非空` → `forwardToOutboundGateway` 直接出局，接通后加入 conference      | **无**（代码已实现）                     |
+| 2 | 双向出局/中继透传 a/b-leg（旧场景五） | 业务层双 originate 携两端网关 ID                                                           | 同上，两腿各自直发 + `bridgeCall(a, b)`                                                                 | **无**（代码已实现）                     |
+| 3 | 转接（REFER）携 `X-Gateway-Id`        | 咨询/盲转转接外线                                                                          | `makeCall` 经网关直出（折中方案，见第十章节 10.3）                                                      | **无**（e2e 转接目标为坐席 C，见场景 6） |
+| 4 | 机器人自动外呼                        | `AutocallServiceImpl` 经 ESL originate **直发网关**（`sofia/external`），**不走 sipproxy** | a-leg 直发 → 接通后 `autocallPark` 按 `ivr_flow` 显式指定驱动 IVR（跳过号码路由）；未指定时兜底号码路由 | ✅ 场景 7                                |
+| 5 | 注册模式网关绑定识别                  | 网关 REGISTER → 代理记录绑定；后续呼入/呼出按绑定识别                                      | 呼出目标解析：注册 Contact > 静态 address                                                               | ✅ 场景 12/13                            |
 
-为避免 INVITE 回环与降低特殊场景的转接延迟，以下三种场景的 c-leg 保留"通过 gatewayId 直接出局"能力， **不走号码路由 +
-IVR**：
+> **设计约束**：豁免场景 c-leg 必须携带 `X-Gateway-Id` 直接出局，业务层负责在 originate 前确定网关 ID；走 IVR 会创建新腿破坏
+> 会议/桥接时序。 **三方会议与双向出局属于能力但不在 test-all 自动化覆盖内**，回归验证依赖人工/专项脚本。
 
-| 场景   | 触发条件                                                | 走通路径                                                                                   |
-|--------|---------------------------------------------------------|--------------------------------------------------------------------------------------------|
-| 场景四 | 三方会议邀请外部手机（ESL originate 携 `X-Gateway-Id`） | SIP 代理收到 FS 源 INVITE + 携带 gw3 → `forwardToOutboundGateway` 直接出局改写             |
-| 场景五 | 双向出局转接（ESL originate 携 `X-Gateway-Id`）         | 同上                                                                                       |
-| 场景六 | 转接携带 `X-Gateway-Id`（折中方案）                     | 转接 携带 gw3 时，FS 通过 ESL originate 直出局（不回注 SIP 代理）                          |
-| 场景七 | 自动外呼（ESL originate 直发）                          | ESL originate 直发（`sofia/external/{target}@{gateway.realm}`），不走 sipproxy INVITE 转发 |
+### 3.6 公共呼叫建立时序（所有走号码路由场景的第一段腿）
 
-实现关键点：`SipInviteRequestHandler.handleIncomingRequest` 中识别"`FREESWITCH` 源 + 携带 `X-Gateway-Id`"的组合，调用
-`SipMessageForwarder.forwardToOutboundGateway` 走出局改写，跳过 FS park + 号码路由 + IVR 流程。详见各场景章节及"八、生产环境必需的
-SIP 补充机制"中的代码说明。
+以下为「INVITE → FS park → 号码路由 → IVR → 转接 originate → 二段腿 → 桥接」的公共时序。后续各场景章节只描述差异段，编号接续本图。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 主叫(坐席/网关)
+    participant SP as SIP 代理(B2BUA)
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH(哑媒体)
+    participant T as 被叫(坐席/网关)
+    A->>SP: INVITE(被叫号码, 可携 X-Gateway-Id)
+    SP-->>A: 100 Trying
+    SP->>FS: 转发 INVITE(负载均衡选 FS)
+    FS-->>SP: 183(FS SDP, 媒体锚定)
+    FS-->>ES: CHANNEL_PARK 事件
+    ES->>ES: 读被叫号+gatewayId → 号码路由正则匹配 → 驱动 IVR
+    ES->>FS: ESL originate(第二段呼叫, 转坐席或携网关出局)
+    FS->>SP: INVITE(source=FREESWITCH, 携/不携 X-Gateway-Id)
+    alt 携网关 ID
+        SP->>T: 豁免直发: 出局改写后转发第三方网关
+    else 不携网关 ID(内部二段腿)
+        SP->>FS: 再次 park → 按注册位置推送到目标坐席
+        FS-->>ES: CHANNEL_PARK(二段腿)
+    end
+    T-->>SP: 180 Ringing / 200 OK
+    SP-->>FS: 转发应答
+    FS-->>ES: CHANNEL_PROGRESS / CHANNEL_ANSWER
+    ES->>FS: ESL bridgeCall(a-leg, b-leg)
+    FS-->>SP: 200 OK(桥接就绪)
+    SP-->>A: 200 OK(FS SDP)
+    Note over A,FS: 通话建立, RTP 经 FS 中继(A↔FS↔被叫)
+```
+
+> **号码路由表必须配置**：坐席分机号的正则规则（如 `^1\d{3}$` 或本系统真值 `^(9#).*`），指向包含转坐席节点的 IVR
+> 流程，否则呼叫将被挂断。
+> 生产环境路由真值见附录 A（route 101-109，与 `test-all/common/data_spec.py` 保持一致）。
 
 ***
 
 ## 四、高可用性（HA）设计
 
-SIP 代理服务作为系统信令核心与控制大脑，是典型的 **单点故障（SPOF）**。为保证系统可用性，需从以下三个层面设计高可用方案：
-
 ### 4.1 SIP 代理服务自身 HA
 
-| 方案                           | 说明                                                           | 适用场景             |
-|--------------------------------|----------------------------------------------------------------|----------------------|
-| **Active-Standby（主备）**     | 一主一备，备用节点通过心跳监控主节点，故障时 VIP 漂移接管      | 中小规模、呼叫量可控 |
-| **Active-Active（双活/集群）** | 多个代理节点同时服务，前端通过负载均衡（DNS SRV / SIP LB）分发 | 大规模、高并发场景   |
-
-**会话状态同步要求**：
-
+```mermaid
+flowchart TB
+    LB["负载均衡/域名入口"] --> SP1["SIP 代理实例 1（主）"]
+    LB --> SP2["SIP 代理实例 2（备/扩展）"]
+    SP1 <-->|"Redis pub/sub 广播<br/>注册表/会话同步"| SP2
+    SP1 -->|"ESL Inbound"| FS["FreeSWITCH"]
+    SP2 -->|"ESL Inbound"| FS
 ```
-SIP 代理集群状态同步:
-├── 注册表同步：坐席注册信息需在所有代理节点间共享（Redis / 数据库 / 组播同步）
-├── 对话状态同步：B2BUA 维护的两段对话映射关系需持久化（用于故障迁移后恢复控制）
-├── ESL 连接状态：每个代理节点维护与各 FS 实例的 ESL 连接池
-├── 号码路由表：全局共享，所有节点可见（路由决策核心）
-└── 网关配置表（FsSipGatewayDO）：全局共享，所有节点可见（IVR 转接节点出局用）
-```
+
+- 会话状态（注册表、CallInfo、转移上下文）持久化 Redis，实例间通过 Redis pub/sub（或 MQ）广播，任一侧故障可接管。
+- 坐席 WSS 注册到任一实例；跨实例呼叫按注册位置转发。
 
 ### 4.2 FreeSWITCH 无状态化与故障切换
 
-FreeSWITCH 本身设计为无状态媒体处理节点，天然支持水平扩展与故障切换：
-
-```
-FS 故障切换流程:
-├── SIP 代理通过 ESL 心跳检测 FS 健康状态
-├── FS 实例故障 → 代理将该实例从负载均衡池中摘除
-├── 新呼叫不再分配到故障 FS
-├── 故障 FS 上的在用呼叫:
-│   ├── 媒体路径中断 → 终端检测到 RTP 超时 → 发起 Re-INVITE 或重连
-│   └── SIP 代理检测到 ESL 断线 → 通过其他 FS 重新 originate 恢复（需业务层支持）
-└── 故障 FS 恢复 → 重新加入负载均衡池
-```
+- FS 不保存呼叫业务状态（业务状态在 cc-server 的 CallInfo/Redis），收到 INVITE 后即 park，等待 ESL 指令——
+  **可随时摘除/新增实例**。
+- 多实例（fs1/fs2）由代理按负载均衡（hash）选择；某 FS 故障时，新呼叫路由到其他实例，ESL 重连后存量 bridge 通话不受影响（FS
+  媒体层独立）。
 
 ### 4.3 ESL 连接断线后的通话保持
 
-ESL 连接断线（FS 容器重启、ESL 服务进程崩溃、网络闪断）时，已建立的通话不应中断：
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ES as cc-server(ESL 客户端)
+    participant FS as FreeSWITCH
+    participant U as 通话双方
+    ES-->>FS: ESL 连接建立(Inbound)
+    Note over ES,FS: 通话进行中...
+    FS--xES: 连接断开(FS 重启/网络闪断)
+    ES->>ES: 指数退避自动重连
+    Note over U: 已 bridge 通话继续(媒体在 FS 内, 不受 ESL 影响)
+    ES-->>FS: 重连成功, 重新订阅事件
+    Note over ES: 断线期间事件丢失 → 业务容忍<br/>(号码路由匹配失败兜底为挂断)
+```
 
-```
-ESL 断线处理策略:
-├── FS 容器重启 → 已建立的 RTP/SDP 媒体会话保留 → FS 重启后自动恢复
-├── 通话桥接保留: uuid_bridge 不依赖 ESL，断线时已 bridge 的通话继续
-├── ESL 重连: FsClient.funtureConnect 自动重连，重连后恢复 ESL 控制（originate/bridge/IVR）
-├── 重连期间产生的 CHANNEL_PARK/CHANNEL_HANGUP 等事件丢失 → 业务层需容忍（号码路由匹配失败兜底为挂断）
-└── 关键状态持久化: CallInfo 通过 Redis SCAN 缓存，重连后可恢复关联
-```
+> **约束**：fs-esl 仅支持 Inbound 模式；事件订阅与命令必须异步（Netty IO 线程内阻塞 `.get()` 会死锁）。
 
 ***
 
-## 五、场景一：JSSIP 坐席A → JSSIP 坐席B（内部呼叫）
+## 五、测试场景总览与编号说明
 
-### 5.1 整体流程时序
+本文场景编号与 `test-all/cc_e2e_test.py` 的 `SCENARIOS` 注册表一致（VALID_SCENARIOS = {1,2,3,5,6,7,8,9,10,11,12,13}）。
+**场景 4 不存在**：官方说明——「场景4 已并入场景3（外部呼入链路由场景3 pjsua 真实呼入覆盖）」。
 
-> **关键说明**：FreeSWITCH 是"哑"媒体服务器， **不配置任何 dialplan 业务逻辑**。FS 收到 INVITE 后立即 park 住呼叫腿，由 SIP
-> 代理服务通过 ESL 监听 `CHANNEL_PARK` 事件后接管控制。 **所有呼叫（含内部坐席间呼叫）强制走号码路由 → IVR → 转接节点**：SIP
-> 代理读取 park 事件中的被叫号码 → 调用 `CallRouteService.getListByRouteNumberAndType` 按正则匹配号码路由表（type=2 呼出）→
-> 用匹配到的 `flowId` 驱动对应 IVR 流程 → IVR 流程执行到转接节点（routeType=1 转坐席，routeValue=坐席B的 ID）→ 通过 ESL
-> `originate` 命令驱动 FS 发起第二段呼叫（回注到 SIP 代理），代理查询坐席B 注册位置后转发给坐席B。最终通过 ESL `bridgeCall`
-> 命令驱动 FS 完成两腿桥接。
->
-> **号码路由表必须配置**：坐席分机号的正则规则（如 `^1\d{3}$`），指向包含转坐席节点的 IVR 流程，否则呼叫将被挂断。
+### 5.1 场景对照表
 
+| 编号 | 名称            | 默认/可选 | 入口                       | route/flow                | e2e 函数                                                   | 对应 v3.0 旧场景               |
+|------|-----------------|-----------|----------------------------|---------------------------|------------------------------------------------------------|--------------------------------|
+| 1    | 内部呼叫        | 默认      | 坐席拨 `9#1002`            | route102/flow102          | `scenario_1_internal_call`                                 | 场景一（内部呼叫）             |
+| 2    | 出局呼叫        | 默认      | 坐席拨 `0#18600000000`     | route105/flow105 → 网关2  | `scenario_2_outbound_call`                                 | 场景二（出局）                 |
+| 3    | 入局 IVR 全链路 | 默认      | pjsua 呼 `4001234`         | route101/flow101          | `scenario_3_inbound_ivr`                                   | 场景三（入局）                 |
+| 5    | 保持/恢复       | 默认      | 通话中 UI 保持/恢复        | flow102 通话              | `scenario_5_hold_resume`                                   | 无（v3.0 无独立章）            |
+| 6    | 咨询转接        | 默认      | REFER attended → 坐席 1003 | flow102 通话              | `scenario_6_consult_transfer`                              | 场景六（转接，目标改为坐席 C） |
+| 7    | 自动外呼        | 默认      | 页面建任务（flow103）      | route103/flow103          | `scenario_7_autocall`                                      | 场景七（自动外呼）             |
+| 8    | 客服组繁忙      | 可选      | 坐席拨 `00300xxx`          | route104/flow104          | `scenario_8_group_busy`                                    | 无                             |
+| 9    | 满意度评价      | 可选      | 坐席拨 `00100xxx`          | route106/flow106          | `scenario_9_satisfaction`                                  | 无                             |
+| 10   | AI 对话         | 可选      | 坐席拨 `00600`             | route107/flow107          | `scenario_10_ai_dialogue`                                  | 无                             |
+| 11   | 并发呼入压测    | 可选      | pjsua 批量呼 `4001234`     | route101/flow101          | `scenario_11_concurrent_inbound` + `cc_concurrent_test.py` | 无                             |
+| 12   | 注册网关呼入    | 可选      | pjsua 经 fs3 呼 `4005678`  | route108/flow108          | `scenario_12_register_gw_inbound`                          | 无                             |
+| 13   | 注册网关呼出    | 可选      | 坐席拨 `8#18600000000`     | route109/flow109 → 网关46 | `scenario_13_register_gw_outbound`                         | 无                             |
+
+默认运行场景 `1,2,3,5,6,7`（每场景最多 3 轮，轮间退避 10s）；场景 8-13 须显式 `--scenarios` 指定。
+
+### 5.2 验证层级（L0 / 场景 / L5）
+
+- **L0 环境/数据核对**：网络连通（后端 HTTPS 401、前端 HTTPS、ESL×2 18021/18121、MySQL 3311、Redis 6379、第三方 FS SIP 9988、第三方
+  FS ESL 9966、sipproxy 5561）+ 数据核对（9 路由/9 流程/坐席 1001-1003/坐席组 1/网关 2/注册网关 46）+ 软电话注册 +
+  坐席登录签入。失败快速退出码 2。
+- **场景执行**：按编号顺序，每场景多轮重试（`--rounds`），失败自动截图至 `screenshots/`。
+- **L5 数据校验**：通话记录（`cc_call_record`）生成数量与关键字段、坐席在线状态。
+- **退出码**：0 = 全部通过；1 = 存在失败场景；2 = L0 失败或参数非法。
+- 常用参数：`--scenarios`、`--headless`、`--rounds`、`--check-only`（只跑 L0）、`--auto-fix`（L0 数据缺失自动修复）、`--skip-l0`。
+
+### 5.3 已记录的系统边界（测试套件已知边界）
+
+1. **hold 音乐与流程误判**：咨询转接 hold 音乐使用 `silence_stream://300000`（5 分钟静音，该 FS 无 `local_stream://moh`
+   ）；短时播放源 播放结束的 PLAYBACK_STOP 会被基线 IVR 流程误判为"放音完成"导致流程提前终止——已由
+   `FsChannelExecuteCompleteEslEventHandler`
+   过滤 hold 音乐播放完成/文件缺失事件，不参与流程流转。
+2. **B-C 桥接后 BYE 481**：`uuid_bridge` 桥接后客户端 BYE 会被 FS 回 481（B2BUA 透传模式下 dialog tag 不一致），场景 6 收尾改用
+   ESL 批量挂断。
+3. **软电话心跳**：sipproxy WS 空闲超时 90s，JsSIP OPTIONS 心跳 30s（`SoftPhone.vue KEEP_ALIVE_INTERVAL`），任一侧调整需联动验证。
+
+***
+
+## 六、场景 1：内部呼叫（坐席A → 坐席B）
+
+### 6.1 场景入口与信令路径
+
+| 项   | 值                                                                                      | 说明                                                                    |
+|------|-----------------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| 拨号 | `9#1002`                                                                                | 前缀 `9#` 由 route102 的 delete_prefix 删除，剩余 `1002` 为被叫坐席分机 |
+| 路由 | route102「呼出-内部电话」`^(9#).*`（direction=2）                                       | 断言关键词 `[删除前缀]`、`[进入callRoute电话]`                          |
+| 流程 | flow102：start → transfer（routeType=1 转坐席，routeValue=`${start-node.callee}`）→ end | 目标坐席来自被叫号码变量                                                |
+| e2e  | `scenario_1_internal_call`：A-B 通话建立、双方通话中、挂断联动、CDR                     | 坐席 A=1001（user 1）、B=1002（user 100），domain `1.com:1`             |
+
+> **关键说明**：内部呼叫同样强制走「号码路由 → IVR → 转接节点」。坐席A 拨 `9#1002` 后，ESL 处理器读取被叫号码 `1002`，
+> 匹配 route102（呼出方向），驱动 flow102 直接执行转坐席节点（routeType=1），目标 = `${start-node.callee}`（即 1002 分机），
+> 经 ESL originate 发起第二段呼叫回注代理，代理查询坐席 1002 注册位置后经 WebSocket 推送振铃。
+
+### 6.2 全链路时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A(1001)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant B as 坐席B(1002)
+    A->>SP: INVITE 9#1002(WSS)
+    SP-->>A: 100 Trying
+    SP->>FS: 转发 INVITE(选 FS 节点)
+    FS-->>A: 183(FS SDP 媒体锚定)
+    FS-->>ES: CHANNEL_PARK(第一段腿)
+    ES->>ES: 读被叫 1002 → route102 匹配 → flow102 转坐席节点
+    ES->>FS: ESL originate(目标 1002, 回注代理)
+    FS->>SP: INVITE(source=FREESWITCH, 无网关ID)
+    SP->>FS: 二段腿再次 park(forwardToFreeSwitch)
+    FS-->>ES: CHANNEL_PARK(第二段腿)
+    ES->>ES: 识别 INTERNAL → 按坐席位置转发
+    SP->>B: 经 WebSocket 推送 INVITE 振铃
+    B-->>SP: 180 Ringing
+    SP-->>FS: 180 → FS
+    B-->>SP: 200 OK(B 接听)
+    SP-->>FS: 200 OK
+    ES->>FS: ESL bridgeCall(a-leg, b-leg)
+    FS-->>SP: 200 OK(桥接完成)
+    SP-->>A: 200 OK(FS SDP)
+    A-->>SP: ACK → FS
+    Note over A,B: 通话建立(A↔FS↔B, RTP 经 FS 中继)
 ```
-坐席A(JSSIP)       SIP代理服务      FreeSWITCH        坐席B(JSSIP)
-    │                  │      ┃ESL     │                  │
-    │                  │      ┃        │                  │
-    │                  │ 【第一段呼叫腿：坐席A → 代理 → FS】  │
-    │①INVITE ─────────►│      ┃        │                  │
-    │ (无网关ID)       │      ┃        │                  │
-    │                  │②鉴权 ┃        │                  │
-    │◄── 100 Trying ───│      ┃        │                  │
-    │                  │③选FS ┃        │                  │
-    │                  │④INVITE(A的SDP)►│                  │
-    │                  │      ┃        │⑤FS锚定媒体       │
-    │                  │      ┃        │  分配RTP端口      │
-    │                  │      ┃        │  183 Progress    │
-    │                  │◄── 183(FS SDP)│                  │
-    │◄── 183(FS SDP)───│      ┃        │                  │
-    │                  │      ┃        │⑥FS park住呼叫腿  │
-    │                  │      ┃◄───────│ CHANNEL_PARK     │
-    │                  │      ┃事件    │ 事件             │
-    │                  │      ┃        │                  │
-    │                  │ 【SIP代理ESL接管：号码路由匹配→IVR→转接节点(routeType=1)】
-    │                  │⑦读取park事件  │                  │
-    │                  │  号码路由匹配 │                  │
-    │                  │  (type=2呼出)│                  │
-    │                  │  →IVR流程    │                  │
-    │                  │  →转接节点   │                  │
-    │                  │  (转坐席B)   │                  │
-    │                  │⑧ESL originate ┃►                 │
-    │                  │  命令驱动FS    │                  │
-    │                  │  发起第二段呼叫┃                  │
-    │                  │      ┃        │                  │
-    │                  │ 【第二段呼叫腿：FS → 代理 → 坐席B】│
-    │                  │◄── INVITE(FS的SDP)                │ ⑨
-    │                  │⑩查询B注册位置   │                  │
-    │                  │── INVITE(FS的SDP)───────────────►│ ⑩
-    │                  │      ┃        │              振铃 │
-    │                  │◄── 180 Ringing───────────────────│
-    │                  │── 180 ────────►│                  │ ⑪
-    │                  │      ┃        │⑫FS收到第二段180  │
-    │                  │      ┃◄───────│ CHANNEL_PROGRESS │
-    │                  │      ┃        │ 事件             │
-    │                  │◄── 180 ────────│                  │
-    │◄── 180 ──────────│      ┃        │                  │
-    │                  │      ┃        │          B接听   │
-    │                  │◄── 200 OK(B的SDP)────────────────│
-    │                  │── 200 OK ─────►│                  │ ⑬
-    │                  │      ┃        │⑭FS两腿就绪       │
-    │                  │⑮ESL bridgeCall┃►                 │
-    │                  │  命令桥接a/b腿 ┃                  │
-    │                  │      ┃        │⑯FS完成媒体桥接   │
-    │                  │      ┃        │  锚定:A腿↔FS↔B腿 │
-    │                  │◄── 200 OK(FS)──│                  │
-    │◄── 200 OK(FS SDP)│      ┃        │                  │
-    │  A发送ACK         │      ┃        │                  │
-    │── ACK ──────────►│      ┃        │                  │
-    │                  │── ACK ───────►│                  │
-    │                  │      ┃        │                  │
-    │  通话建立(媒体:RTP经FS中继)                  │
-    │◄═══════════════════════════════════════════════►│
-    │                  │      ┃        │                  │
-```
 
-### 5.2 SIP 代理服务的具体处理流程
+### 6.3 分步处理
 
-1. **WsInviteRequestHandler.doHandle**：
-    - 提取 From/To 头，发送 100 Trying，调用 `nodeManager.selectFreeSwitchNode` 选择 FS 节点。
-    - 设置 `callType=OUTBOUND`（统一标记，不区分内部/外呼）。
-    - 提取 `X-Gateway-Id`（如有）→ `SessionInfo.gatewayId`。本场景无网关 ID。
-    - 缓存 SessionInfo，`messageForwarder.forwardToFreeSwitch` 转发到 FS。
-2. **FS 收到 INVITE → 媒体锚定 → 183 Progress → park**。
-3. **ESL** **`CHANNEL_PARK`** **事件 → FsChannelParkEslEventHandler.outboundCall**：
-    - 读取 `variable_sip_h_X-Gateway-Id`（本场景为空）→ `CallInfo.gatewayId=null`。
-    - 构造 `CallInfo(callType=IVR, direction=2, gatewayId=null)`。
-    - `process=CALL_ROUTE` 提交到 `FsCallIRouteProcess`。
-4. **FsCallIRouteProcess.handler**：
-    - `getCallRouteNoTenant(callee=坐席B分机号, direction=2)` 正则匹配号码路由表。
-    - 匹配到坐席分机号规则（如 `^1\d{3}$`）→ 取 `flowId` 驱动 IVR 流程。
-5. **IVR 流程执行到转接节点（routeType=1 转坐席）**：
-    - `FlowTransferHandler` 触发，调用 `fsClient.originate` 发起第二段呼叫，目标=坐席B 注册地址。
-6. **FS 发第二段 INVITE → SIP 代理（SipInviteRequestHandler）**：
-    - `source=FREESWITCH`、`gatewayId=null` → `callType=INTERNAL`。
-    - `forwardToFreeSwitch` 转发到 FS park。
-7. **SipDefaultRequestHandler / WsReferRequestHandler 不参与**：第二段 INVITE 后转为对坐席B 的 WebSocket 推送（
-   `forwardToWebSocketByUser`）→ JsSIP 振铃 → 接听 → 200 OK。
-8. **ESL** **`bridgeCall`** **桥接 a-leg（坐席A FS 通道）与 b-leg（坐席B FS 通道）** → FS 完成媒体锚定 → 通话建立。
+1. **WsInviteRequestHandler.doHandle**：提取 From/To 头，发送 100 Trying，调用 `nodeManager.selectFreeSwitchNode` 选择 FS
+   节点； 设置 `callType=OUTBOUND`（统一标记）；提取 `X-Gateway-Id`（如有）→ `SessionInfo.gatewayId`（本场景无）；缓存
+   SessionInfo，
+   `messageForwarder.forwardToFreeSwitch` 转发到 FS。
+2. **FS 收到 INVITE → 媒体锚定 → 183 → park**。
+3. **ESL `CHANNEL_PARK` → FsChannelParkEslEventHandler.outboundCall**：读取 `variable_sip_h_X-Gateway-Id`（空）→ 构造
+   `CallInfo(callType=IVR, direction=2, gatewayId=null)`，`process=CALL_ROUTE` 提交 `FsCallIRouteProcess`。
+4. **FsCallIRouteProcess.handler**：`getCallRouteNoTenant(callee=1002, direction=2)` 匹配 route102 → 取 flowId=102 驱动
+   IVR； 同时触发录音（`fsClient.record`，路径存入 `CallInfo.record`）。
+5. **flow102 转接节点（routeType=1）**：`FlowTransferHandler` 触发，目标 = `${start-node.callee}`（1002），
+   `fsClient.originate` 发起第二段呼叫。
+6. **FS 发第二段 INVITE → SipInviteRequestHandler**：`source=FREESWITCH`、`gatewayId=null` → `callType=INTERNAL` →
+   `forwardToFreeSwitch` 再次 park。
+7. **二段腿 CHANNEL_PARK → 按坐席位置转发**：`forwardToWebSocketByUser` 推送坐席 1002 → JsSIP 振铃 → 接听 → 200 OK。
+8. **ESL `bridgeCall`** 桥接 a-leg（坐席A FS 通道）与 b-leg（坐席B FS 通道）→ 通话建立。
 
-> **注意**：内部坐席间呼叫通常不携带 `X-Gateway-Id`。`X-Gateway-Id` 仅在 IVR 流程执行到转接节点（routeType=2 外呼）时作为网关
-> ID 覆盖项使用。
+> **注意**：内部坐席间呼叫通常不携带 `X-Gateway-Id`。`X-Gateway-Id` 仅在 IVR 转接节点（routeType=2 外呼）时作为网关覆盖项使用。
 
-### 5.3 被叫为非坐席号码时的 IVR 处理流程
-
-无论被叫是否是已注册坐席，所有呼叫都必须走号码路由匹配 → IVR 流程。当坐席A 发起 INVITE 到非坐席号码（如外部手机号、IVR
-接入号等）时，SIP 代理服务通过号码路由表匹配到对应 IVR 流程后执行：
-
-1. **号码路由匹配**：根据 `callee` 正则匹配 → 取 `flowId`。
-2. **IVR 流程驱动**：执行 IVR 流程中的节点（播放欢迎语、收 DTMF、转接等）。
-3. **转接节点（transfer-node）执行**：
-    - `routeType=1`（转坐席）→ ESL originate 发起第二段呼叫到目标坐席。
-    - `routeType=2`（外呼）→ 按"网关 ID 覆盖优先级"确定出局网关（详见 3.3 节）。
-4. **后续流程**与场景一/场景二/场景六相同。
-
-### 5.4 BYE 挂断流程
+### 6.4 BYE 挂断流程
 
 BYE 挂断需在两段对话中分别处理：
 
-1. **坐席A 发起 BYE**（Call-ID-1）→ `WsDefaultRequestHandler` 透传到 FS → FS 触发 `CHANNEL_HANGUP` 事件。
-2. **SIP 代理监听到 hangup 事件** → `FsChannelHangUpEslEventHandler`：
-    - 从 `CallInfo.channelMap` 取 a-leg/b-leg UUID。
-    - 调用 `fsClient.uuidKill(address, legUuid)` 释放另一侧（避免漏挂断）。
-    - 清理 `CallInfo` 与 Redis 缓存。
+1. **坐席A 发起 BYE**（Call-ID-1）→ `WsDefaultRequestHandler` 透传到 FS → FS 触发 `CHANNEL_HANGUP`。
+2. **SIP 代理监听到 hangup → FsChannelHangUpEslEventHandler**：从 `CallInfo.channelMap` 取 a-leg/b-leg UUID，调用
+   `fsClient.uuidKill(address, legUuid)` 释放另一侧（避免漏挂断）；清理 CallInfo 与 Redis 缓存。
 3. **SIP 代理向坐席B 转发 BYE**（Call-ID-2）→ 坐席B 端 JsSIP 收到 BYE → 回 200 OK。
 
-> **已实现**：`FsChannelHangUpEslEventHandler` 已实现 c-leg 清理逻辑——读取 `Other-Leg-Unique-ID` 后调用
-> `fsClient.hangupCall` 释放关联腿，并更新 `CallInfo.channelMap`（`removeChannelInfoMap`）和 `uniqueIdList`（
-> `removeUniqueIdList`），保证缓存与 FS 通道状态一致。`hangupCall` 失败不中断流程，后续由 `CHANNEL_HANGUP_COMPLETE` 事件兜底清理。
+> **已实现**：`FsChannelHangUpEslEventHandler` 读取 `Other-Leg-Unique-ID` 后调用 `fsClient.hangupCall` 释放关联腿，并更新
+> `CallInfo.channelMap`/`uniqueIdList`，保证缓存与 FS 通道状态一致；`hangupCall` 失败不中断流程，由
+> `CHANNEL_HANGUP_COMPLETE` 兜底清理。
+
+### 6.5 错误处理
+
+| 错误场景                                       | 检测点                         | 处理策略                                       |
+|------------------------------------------------|--------------------------------|------------------------------------------------|
+| 号码路由未匹配（如拨号非 9# 前缀且无其它规则） | `FsCallIRouteProcess` 匹配失败 | `playFile(SYSTEM_ERROR)` + `hangupCall` + 告警 |
+| 目标坐席未注册/离线                            | originate 无注册位置           | 返回 404/振铃失败，CDR 记录                    |
+| 目标坐席忙                                     | 486 Busy                       | 可选转接策略或播放忙音                         |
+| 主叫早释                                       | `CHANNEL_HANGUP`               | `uuidKill` 释放对端；CDR 记录"主叫早释"        |
+
+### 6.6 自动化验证对应
+
+`cc_e2e_test.py --scenarios 1`：断言 Java 日志 `[进入callRoute电话]`、`[删除前缀]`、坐席 B 来电/接听/通话建立、 坐席 A 挂断后
+B 联动挂断、`cc_call_record` 生成（caller=1001）、flow102 实例终态。
 
 ***
 
-## 六、场景二：JSSIP 坐席A → 外部用户手机（出局呼叫）
+## 七、场景 2：出局呼叫（坐席A → 外部手机，经第三方网关）
 
-### 6.1 整体流程时序
+### 7.1 场景入口与信令路径
 
-```
-坐席A(JSSIP)        SIP代理服务       FreeSWITCH       第三方网关/运营商      手机
-    │                  │      ┃ESL     │                  │              │
-    │①INVITE ─────────►│      ┃        │                  │              │
-    │ (X-Gateway-Id=gw3)    ┃        │                  │              │
-    │◄── 100 Trying ───│      ┃        │                  │              │
-    │                  │②③④⑤⑥ (同场景一)              │              │
-    │                  │      ┃        │⑥FS park住呼叫腿  │              │
-    │                  │      ┃◄───────│ CHANNEL_PARK     │              │
-    │                  │      ┃        │ 事件             │              │
-    │                  │      ┃        │                  │              │
-    │                  │ 【号码路由匹配→IVR→转接节点(routeType=2)】
-    │                  │⑦号码路由匹配 │                  │              │
-    │                  │  (type=2呼出)│                  │              │
-    │                  │  →IVR流程    │                  │              │
-    │                  │  →转接节点   │                  │              │
-    │                  │  (routeType=2)                  │              │
-    │                  │⑧解析网关ID优先级:              │              │
-    │                  │  CallInfo.gatewayId=gw3 ✓      │              │
-    │                  │  →使用gw3作为出局网关            │              │
-    │                  │⑨ESL originate ┃►                │              │
-    │                  │  (sip_h_X-Gateway-Id=gw3)       │              │
-    │                  │  sofia/gateway/gw3/13800138000@GW              │
-    │                  │      ┃        │                  │              │
-    │                  │ 【第二段呼叫腿：FS → 代理 → 第三方网关】
-    │                  │      ┃        │⑩FS发INVITE给代理  │              │
-    │                  │◄── INVITE(gw3)│                  │              │
-    │                  │  (X-Gateway-Id=gw3)              │              │
-    │                  │  (FREESWITCH源+携带gw3)          │              │
-    │                  │      ┃        │                  │              │
-    │                  │ 【SIP代理识别豁免场景：直接出局改写】
-    │                  │⑪forwardToOutboundGateway(gw3)  │              │
-    │                  │  →rewriteForOutbound           │              │
-    │                  │  →forwardToThirdParty          │              │
-    │                  │────────────────────────────────►│ ⑫INVITE       │
-    │                  │  (From改DID, PAI注入)            │              │
-    │                  │                  ◄── 183 ────────│              │
-    │                  │◄── 183 ────────│                  │              │
-    │◄── 183 ──────────│      ┃        │                  │              │
-    │                  │                  ◄── 180 Ringing ─│              │
-    │                  │◄── 180 ────────│                  │              │
-    │◄── 180 ──────────│      ┃        │                  │              │
-    │                  │                  ◄── 200 OK ─────│              │
-    │                  │◄── 200 OK ─────│                  │              │
-    │                  │      ┃        │                  │              │
-    │                  │ 【ESL bridgeCall + 坐席A 200 OK】
-    │                  │⑬ESL bridgeCall ┃►                │              │
-    │                  │  →FS桥接a-leg和b-leg            │              │
-    │                  │⑭ ── 200 OK ────────────────────►│ ⑭            │
-    │◄── 200 OK(FS SDP)│      ┃        │                  │              │
-    │  A发送ACK         │      ┃        │                  │              │
-    │── ACK ──────────►│── ACK ──────────────────────────►│              │
-    │                  │      ┃        │                  │              │
-    │  通话建立(RTP:A↔FS(转码)↔网关↔手机)             │
-    │◄═══════════════════════════════════════════════════════════════►│
+| 项   | 值                                                                                     | 说明                                                       |
+|------|----------------------------------------------------------------------------------------|------------------------------------------------------------|
+| 拨号 | `0#18600000000`                                                                        | 前缀 `0#` 由 route105 delete_prefix 删除，剩余为被叫手机号 |
+| 路由 | route105「呼出-外部电话」`^(0#).*`（direction=2）                                      | 断言 `[删除前缀]`                                          |
+| 流程 | flow105：start → transfer（routeType=2 外呼，routeValue=2 → 网关2「第三方网关」）→ end | 网关 2：username 18600000000、address <A服务器公网>        |
+| e2e  | `scenario_2_outbound_call`：经网关出局、对端（pjsua 模拟手机）应答、RTP 收流、CDR      | 断言 answer_flag=1、RTP rxBytes 增长                       |
+
+> **关键说明**：坐席A 拨 `0#` 前缀命中外呼路由 flow105，转接节点 routeType=2 且 routeValue=2（网关 2），由当前连接的 FS
+> 经 `sofia/gateway/2/...` 出局到第三方网关（fs3 模拟运营商），再由 fs3 桥接 pjsua 软电话（模拟手机 18600000000）。
+> 本场景 INVITE 未携带 `X-Gateway-Id`，网关 ID 走 IVR routeValue 兜底（优先级 2）。
+
+### 7.2 全链路时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A(1001)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant GW as 第三方网关(fs3)
+    participant M as 手机(pjsua 18600000000)
+    A->>SP: INVITE 0#18600000000(WSS)
+    SP-->>A: 100 Trying
+    SP->>FS: 转发 INVITE(第一段腿)
+    FS-->>A: 183(FS SDP)
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: 号码路由 route105 → flow105 转接节点
+    ES->>ES: 网关解析: CallInfo.gatewayId 空 → routeValue=2 → 网关2
+    ES->>FS: ESL originate(sofia/gateway/2/18600000000)
+    FS->>SP: INVITE(source=FREESWITCH, X-Gateway-Id=2)
+    SP->>GW: 豁免直发: 出局改写(From 改 DID/PAI)后转发
+    GW->>M: INVITE(桥接手机)
+    M-->>GW: 180/200 OK
+    GW-->>SP: 180/200 OK
+    SP-->>FS: 转发应答
+    ES->>FS: ESL bridgeCall(a-leg, b-leg)
+    FS-->>SP: 200 OK
+    SP-->>A: 200 OK(FS SDP)
+    Note over A,M: 通话建立(A↔FS↔网关↔手机, RTP 经 FS 转码中继)
 ```
 
-### 6.2 SIP 代理服务处理流程详解
+### 7.3 分步处理
 
-#### 6.2.1 第一段 INVITE 处理（同场景一）
+1. **第一段 INVITE 处理同场景 1**（3.6 公共图 1-6 步）。
+2. **IVR 转接节点（routeType=2 外呼）→ FlowCallOutRouteHandler**：
+    - 网关 ID 三级优先级解析：`CallInfo.gatewayId`（空）→ `properties.routeValue`（=2）→ 使用网关 2；
+   - 查询 `FsSipGatewayDO`（id=2：username 18600000000、address <A服务器公网>）；
+    - `fsClient.makeCall(..., sipGateway=2)` → `{sip_h_X-Gateway-Id=2}sofia/gateway/2/18600000000@代理地址`。
+3. **第二段 INVITE 豁免识别**：`SipInviteRequestHandler` 检测 `source=FREESWITCH && gatewayId=2` → **豁免分支**：
+   `forwardToOutboundGateway(request, gw2)` → 改写 From 头（DID）、注入 PAI、移除 Record-Route → 转发第三方网关。
+4. **出局响应处理**：网关 183/180/200 → `UnifiedResponseHandler`（`THIRD_PARTY × OUTBOUND → FREESWITCH` 策略表）→ 转发 FS；
+   200 OK → FS → `bridgeCall` 桥接两腿 → 向坐席A 转发 200 OK。
 
-1. `WsInviteRequestHandler.doHandle`：提取 `X-Gateway-Id=gw3` → `SessionInfo.gatewayId=gw3`。
-2. 转发 INVITE 到 FS park。
-3. ESL `CHANNEL_PARK` 事件 → `FsChannelParkEslEventHandler.outboundCall`（JsSIP UA 命中）。
-4. 构造 `CallInfo(callType=IVR, gatewayId=gw3)`，`process=CALL_ROUTE`。
-5. `FsCallIRouteProcess.handler`：号码路由匹配 → 匹配到手机号规则 → IVR 流程。
-6. **IVR 转接节点（routeType=2 外呼）**：
-    - `FlowCallOutRouteHandler.resolveOutboundGateway`（3 级优先级）：
-        - 优先级 1：`CallInfo.gatewayId=gw3` 非空 → 使用 gw3。
-    - 通过 gw3 查询 `FsSipGatewayDO` 配置（IP/端口/认证）。
-    - 调用 `fsClient.makeCall(..., sipGateway=gw3)` 发起 ESL originate：
-      `{sip_h_X-Gateway-Id=gw3}sofia/gateway/gw3/13800138000@代理地址`。
+### 7.4 错误处理
 
-#### 6.2.2 第二段 INVITE 路由决策（关键：豁免场景识别）
+| 错误场景                                | 检测点                              | 处理策略                                                                               |
+|-----------------------------------------|-------------------------------------|----------------------------------------------------------------------------------------|
+| 号码路由未匹配到手机号规则              | `FsCallIRouteProcess` 匹配失败      | `playFile(SYSTEM_ERROR)` + `hangupCall` + 告警                                         |
+| 网关 ID 无效（FsSipGatewayDO 不存在）   | `FlowCallOutRouteHandler` 查询失败  | 回退 routeValue；再空 → 当前 FS 兜底；告警"网关 ID 无效"                               |
+| 第三方网关不可达                        | INVITE 32s 超时 / 503               | `playFile(SYSTEM_ERROR)` + `hangupCall`；ESL `uuidKill` 释放 a-leg；CDR 记录"出局失败" |
+| 网关返回 407 Proxy Auth                 | 响应路径                            | 重新注入 Authorization 头并重发 INVITE（去除旧 To tag，RFC 3261）                      |
+| 网关返回 401 Unauthorized               | 同上                                | 注入 Authorization 头并重发 INVITE                                                     |
+| 主叫早释                                | `CHANNEL_HANGUP`                    | `uuidKill` 释放外呼 b-leg；CDR 记录"主叫早释"                                          |
+| 二段 INVITE 网关 ID 指向内部 FS（违规） | `forwardToOutboundGateway` 前置校验 | 阻断并返回 500，告警"网关 ID 指向内部 FS，疑似回环"                                    |
 
-FS 发第二段 INVITE 给代理，携带 `X-Gateway-Id=gw3`、`source=FREESWITCH`：
+### 7.5 自动化验证对应
 
-- `SipInviteRequestHandler.handleIncomingRequest` 检测到 `source=FREESWITCH && gatewayId 非空` → **走豁免分支**：
-    - **不转发到 FS park**，直接调用 `messageForwarder.forwardToOutboundGateway(request, gw3)`。
-    - 改写 From 头（DID）、注入 PAI、移除 Record-Route。
-    - 转发到第三方网关（`FsSipGatewayDO` 中配置的 IP:port）。
-- **如果未携带** **`X-Gateway-Id`**（依赖 IVR routeValue 兜底）：走 `forwardToFreeSwitch` 重新 park + 号码路由 +
-  IVR（本场景不适用，因坐席A INVITE 已携带 gw3）。
-
-#### 6.2.3 出局响应处理
-
-1. 第三方网关 183/180/200 响应 → SIP 代理 `UnifiedResponseHandler`：
-    - `source=THIRD_PARTY`、`callType=OUTBOUND` → 策略表命中"THIRD\_PARTY × OUTBOUND → FREESWITCH" → 转发到 FS。
-2. 200 OK → FS → `bridgeCall` 桥接 a-leg/b-leg → FS 完成媒体锚定。
-3. SIP 代理向坐席A 转发 200 OK → 坐席A 发送 ACK。
-
-### 6.3 错误处理场景
-
-| 错误场景                                    | 检测点                              | 处理策略                                                                               |
-|---------------------------------------------|-------------------------------------|----------------------------------------------------------------------------------------|
-| 号码路由表未匹配到手机号正则                | `FsCallIRouteProcess` 匹配失败      | `playFile(SYSTEM_ERROR)` + `hangupCall` + 告警日志 "号码 \[callee] 未匹配到路由规则"   |
-| 匹配到路由但 flowId 为空                    | `CallRouteDO.flowId == null`        | 同上 + 告警 "号码路由 \[routeId] 的 flowId 为空"                                       |
-| `FsSipGatewayDO` 不存在（gw3 无效）         | `FlowCallOutRouteHandler` 查询失败  | 回退到 `routeValue`；routeValue 也为空 → 当前 FS 兜底；告警 "网关 ID 无效"             |
-| 第三方网关不可达                            | INVITE 超时 / 503 响应              | `playFile(SYSTEM_ERROR)` + `hangupCall`；ESL `uuidKill` 释放 a-leg；CDR 记录"出局失败" |
-| 坐席挂断外呼中（早释）                      | `CHANNEL_HANGUP` 事件触发           | `uuidKill` 释放外呼 b-leg；CDR 记录"主叫早释"                                          |
-| 第二段 INVITE 网关 ID 仍指向内部 FS（违规） | `forwardToOutboundGateway` 前置校验 | 阻断并返回 500 Server Error，告警 "网关 ID 指向内部 FS，疑似回环"                      |
-| 第三方网关返回 407 Proxy Auth               | `SipInviteRequestHandler` 响应路径  | 重新注入 Authorization 头并重发 INVITE（去除旧 To tag，参照 RFC 3261 流程）            |
+`cc_e2e_test.py --scenarios 2`：断言 `[进入callRoute电话]`、`[删除前缀]`、pjsua 应答、双向通话建立、 挂断后 `cc_call_record`
+（caller=1001、answer_flag=1、RTP rxBytes 增长）与 flow105 终态。
 
 ***
 
-## 七、场景三：外部用户手机 → JSSIP 坐席A（入局呼叫）
+## 八、场景 3：入局 IVR 全链路（外部手机 → 坐席）
 
-### 7.1 整体流程时序
+### 8.1 场景入口与信令路径
 
-```
-手机→运营商→第三方网关      SIP代理服务       FreeSWITCH        坐席A(JSSIP)
-    │              │              │      ┃ESL     │              │
-    │              │①INVITE ──────►│      ┃        │              │
-    │              │ (无网关ID)     │      ┃        │              │
-    │              │              │      ┃        │              │
-    │              │②识别 source=THIRD_PARTY  ┃        │              │
-    │              │  callType=INBOUND       ┃        │              │
-    │              │  thirdPartyNode=网关地址  ┃        │              │
-    │              │              │③选FS ┃        │              │
-    │              │              │④INVITE(FS的SDP)►              │
-    │              │              │      ┃        │⑤FS park      │
-    │              │              │      ┃        │  CHANNEL_PARK│
-    │              │              │      ┃        │              │
-    │              │              │ 【号码路由匹配→IVR→ACD选坐席】
-    │              │              │⑥号码路由匹配(type=1呼入)        │
-    │              │              │  →IVR流程(入局)              │
-    │              │              │  →ACD策略选坐席A             │
-    │              │              │  (routeType=1转坐席)         │
-    │              │              │⑦ESL originate ┃►             │
-    │              │              │  到坐席A(回注到代理)          │
-    │              │              │      ┃        │              │
-    │              │              │ 【第二段呼叫腿：FS → 代理 → 坐席A】
-    │              │              │      ┃        │              │
-    │              │              │◄── INVITE(FS的SDP)            │
-    │              │              │ (source=FREESWITCH)          │
-    │              │              │ (无X-Gateway-Id)              │
-    │              │              │  callType=INTERNAL           │
-    │              │              │  →forwardToFreeSwitch        │
-    │              │              │── INVITE ──────────────────►│ ⑧
-    │              │              │      ┃        │              │
-    │              │              │◄── 180 Ringing─────────────  │
-    │              │              │── 180 ──────►│              │
-    │              │              │      ┃        │              │
-    │              │              │◄── 200 OK────  │ ⑨A接听     │
-    │              │              │── 200 OK ────►│              │
-    │              │              │      ┃        │              │
-    │              │              │ 【ESL bridgeCall + 向第三方网关转发200 OK】
-    │              │              │⑩ESL bridgeCall ┃►            │
-    │              │              │      ┃        │              │
-    │              │              │── 200 OK ──────────────────►│ ⑪
-    │              │              │      ┃        │              │
-    │              │              │      ┃        │              │
-    │              │              │      ┃        │              │
-    │  通话建立(媒体:手机↔网关↔FS(转码)↔坐席A)
-    │◄═══════════════════════════════════════════════════►│
+| 项   | 值                                                                                                                                                                            | 说明                                                                  |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| 呼入 | pjsua（模拟手机 18600000000）呼 `4001234`                                                                                                                                     | 经 fs3（模拟运营商 9988）拨入 CC                                      |
+| 路由 | route101「呼入-4001234」`^(4001234).*`（direction=1 呼入）                                                                                                                    | 断言：`流式播放完成`、`分支命中`、`ivr方法调用节点处理`、`[转坐席组]` |
+| 流程 | flow101：start → receive(收号按 1) → condition(IF result==1) → playback×4（收号提示/分支放音/转接提示等）→ method → condition(IF 非空) → transfer(routeType=4 坐席组 1) → end | DTMF=1                                                                |
+| e2e  | `scenario_3_inbound_ivr`：IVR 放音（含 TTS 流式）、收号、IF 分支、转坐席组、坐席接听、挂断联动、CDR                                                                           | 覆盖原「场景 4」外部呼入链路                                          |
+
+> **关键说明**：入局呼叫由第三方网关（fs3 模拟运营商）发起：pjsua 注册 fs3 后呼叫 4001234，fs3 dialplan `outbound_to_gateway`
+> 将 INVITE 桥接到 sipproxy（<A服务器公网>:5561）。代理识别 `source=THIRD_PARTY` → `callType=INBOUND`，缓存 thirdPartyNode
+> 用于响应回传；INVITE 转发内部 FS park 后，ESL 按被叫 4001234 匹配 **呼入方向**路由 route101 → 驱动 flow101 完整 IVR。
+> **入局必须匹配呼入路由表**（type=1）：未配置 DID 呼入规则时呼叫将被挂断。
+
+### 8.2 全链路时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant P as pjsua 手机(18600000000)
+    participant GW as 第三方网关(fs3)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant A as 坐席A(坐席组1)
+    P->>GW: 注册 fs3 + 呼叫 4001234
+    GW->>SP: INVITE 4001234(THIRD_PARTY)
+    SP-->>GW: 100 Trying
+    SP->>FS: 转发 INVITE(选 FS)
+    FS-->>GW: 183(FS SDP)
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: 呼入方向匹配 route101 → flow101 IVR 启动
+    ES->>FS: ESL 放音(欢迎语/提示音, 流式 TTS)
+    ES->>FS: ESL play_and_get_digits(收号)
+    P-->>GW: DTMF 1
+    GW-->>FS: DTMF → FS
+    ES->>ES: condition(IF result==1) 分支命中 → method 节点
+    ES->>FS: ESL originate(转坐席组1 → 选空闲坐席A)
+    FS->>SP: INVITE(二段腿, 无网关ID)
+    SP->>A: 经 WebSocket 推送振铃
+    A-->>SP: 200 OK(A 接听)
+    ES->>FS: ESL bridgeCall(呼入腿, 坐席腿)
+    SP-->>GW: 200 OK(桥接完成)
+    Note over P,A: 通话建立(手机↔fs3↔FS↔坐席A)
 ```
 
-### 7.2 SIP 代理服务处理流程详解
+### 8.3 分步处理
 
-1. **SipInviteRequestHandler.handleIncomingRequest**：
-    - `source=THIRD_PARTY`（通过 `SipMessageForwarder.identifyMessageSource` 识别）→ `callType=INBOUND`。
-    - 缓存 `thirdPartyNode`（用于响应转发方向）。
-    - `forwardToFreeSwitch` 转发到 FS park。
-2. **ESL** **`CHANNEL_PARK`** **事件 → FsChannelParkEslEventHandler.inboundCall**（非 JsSIP UA）：
-    - 构造 `CallInfo(callType=IVR, direction=1)`。
-    - 走 `handleIvrRoute` → `FsCallIRouteProcess`。
-3. **FsCallIRouteProcess**：
-    - `getCallRouteNoTenant(callee=DID号码, direction=1)` 匹配入局号码路由表。
-    - 匹配到 DID 规则 → IVR 流程（播放欢迎语、收 DTMF、转人工坐席）。
-4. **IVR ACD 选坐席** → `routeType=1 转坐席` → ESL originate 到坐席A。
-5. **第二段 INVITE 同场景一**（`source=FREESWITCH, gatewayId=null, callType=INTERNAL`）→ `forwardToFreeSwitch` → FS park →
-   `forwardToWebSocketByUser` 推到 JsSIP。
-6. **坐席A 接听 → 200 OK** → ESL `bridgeCall` + SIP 代理向第三方网关转发 200 OK（策略表：`THIRD_PARTY × INBOUND` → 200 OK
-   回到网关）。
+1. **SipInviteRequestHandler.handleIncomingRequest**：`source=THIRD_PARTY`（`identifyMessageSource` 识别）→
+   `callType=INBOUND`； 缓存 `thirdPartyNode`（响应转发方向）；`forwardToFreeSwitch` 转发 FS park。
+2. **ESL `CHANNEL_PARK` → FsChannelParkEslEventHandler.inboundCall**（非 JsSIP UA）：构造
+   `CallInfo(callType=IVR, direction=1)`， 走 `handleIvrRoute` → `FsCallIRouteProcess`。
+3. **FsCallIRouteProcess**：`getCallRouteNoTenant(callee=4001234, direction=1)` 匹配 route101 → flow101；触发录音。
+4. **flow101 节点链执行**：start → receive（收号，按键 1）→ condition（IF result==1）→ 分支放音（流式播放）→ method（
+   `ivr方法调用节点处理`）→ condition（IF 非空）→ transfer（ **routeType=4 转坐席组**，routeValue=1 → 坐席组
+   1：1001/1002/1003）→ end。
+5. **坐席组选座**：ACD 空闲坐席选择（Redis 状态 + Lua CAS 原子抢占，见第十五章节并发经验）；ESL originate 到选中坐席。
+6. **第二段 INVITE 同场景 1**（`source=FREESWITCH, gatewayId=null`）→ park → `forwardToWebSocketByUser` 推送坐席。
+7. **坐席接听 → 200 OK** → ESL `bridgeCall` + 向第三方网关转发 200 OK（策略表：`THIRD_PARTY × INBOUND` → 200 OK 回网关）。
 
-### 7.3 呼叫转移/盲转场景
+### 8.4 错误处理
 
-入局呼叫到达坐席A 后，坐席A 可通过 IVR 转接节点（routeType=1）转接到其他坐席，或通过 routeType=2 转接到外部手机：
+| 错误场景            | 处理策略                                                            |
+|---------------------|---------------------------------------------------------------------|
+| 号码路由未匹配 DID  | `playFile(SYSTEM_ERROR)` + 挂断 + 告警                              |
+| IVR 收号超时/无按键 | receive 节点超时策略（按配置重放或走超时分支）                      |
+| 坐席组全忙          | 转接节点按 full_busy 策略（排队/溢出/播放忙音，见场景 8 与场景 11） |
+| 主叫早释            | `uuidKill` 释放坐席腿；CDR 记录                                     |
 
-- **转坐席（routeType=1）**：ESL originate 到目标坐席，重复场景一/二流程。
-- **转外部手机（routeType=2）**：ESL originate 携 `X-Gateway-Id` → 走场景二第二段流程。
-- **转接**：见场景六。
+### 8.5 自动化验证对应
 
-> **入局必须匹配呼入路由表**：入局呼叫的被叫号码为运营商分配的 DID 号码，需在号码路由表中配置 DID 号码的正则规则（type=1
-> 呼入），指向对应的 IVR 流程。若未配置呼入路由规则，呼叫将被挂断。
+`cc_e2e_test.py --scenarios 3`：断言后端日志 `流式播放完成`、`分支命中`、`ivr方法调用节点处理`、`[转坐席组]`、
+坐席接听/双向通话/挂断联动、`cc_call_record` 生成、flow101 终态。
 
 ***
 
-## 八、场景四：坐席A + 坐席B + 外部手机（三方会议）
+## 九、场景 5：保持/恢复（Hold / Resume）
 
-### 8.1 整体流程时序
+### 9.1 场景入口与信令路径
 
-```
-坐席A        坐席B        SIP代理         FreeSWITCH      第三方网关       手机
-  │             │          │      ┃ESL       │              │              │
-  │             │          │      ┃          │              │              │
-  │  ①坐席A与坐席B已建立通话(参见场景一)                            │
-  │═════════════╪═══════════╡      ┃          │              │              │
-  │             │          │      ┃          │              │              │
-  │  ②坐席A发起"邀请外部手机加入会议"操作(坐席API)                   │
-  │── API ─────►│          │      ┃          │              │              │
-  │             │          │      ┃          │              │              │
-  │             │          │ 【SIP代理ESL驱动:创建会议+迁移腿+originate c-leg】
-  │             │          │ ③ESL conference 3000 创建         │
-  │             │          │  ④uuid_转移: A、B 腿从 bridge 状态迁移到 conf 3000
-  │             │          │  ⑤ESL originate ┃► (sip_h_X-Gateway-Id=gw3) │
-  │             │          │   sofia/gateway/gw3/13800138000@代理              │
-  │             │          │      ┃          │              │              │
-  │             │          │ 【第二段INVITE: FS→代理→第三方网关(豁免场景)】
-  │             │          │      ┃          │              │              │
-  │             │          │      ┃◄─────────│ INVITE(gw3)  │              │
-  │             │          │      ┃          │              │              │
-  │             │          │ 【SIP代理识别FREESWITCH+gw3 → 豁免分支】
-  │             │          │ ⑥forwardToOutboundGateway(gw3)  │              │
-  │             │          │  →rewriteForOutbound            │              │
-  │             │          │ ────────────────────────────────► ⑦INVITE      │
-  │             │          │                ◄── 183 ──────────│              │
-  │             │          │                ◄── 180 ──────────│              │
-  │             │          │                ◄── 200 OK ──────│ ⑧手机接听    │
-  │             │          │      ┃          │  c-leg 已加入 conf 3000         │
-  │             │          │      ┃          │              │              │
-  │  通话建立(三方会议: A↔FS会议桥↔B, 手机↔FS会议桥↔c-leg)
-  │═══════════════════════════════════════════════════════════════►│
-```
+| 项   | 值                                                                       | 说明                     |
+|------|--------------------------------------------------------------------------|--------------------------|
+| 入口 | 内部通话建立后（flow102，如坐席A ↔ 坐席B），坐席A 点 UI「保持」/「恢复」 | 浏览器坐席操作           |
+| 断言 | hold 播放 `silence_stream://300000`（5 分钟静音 MOH）；恢复后通话继续    | `scenario_5_hold_resume` |
+| e2e  | 保持成功轮 ≥ 1（3 轮中）即降级通过                                       | 网络抖动容忍             |
 
-### 8.2 SIP 代理服务处理流程详解
+> **关键说明（已知边界）**：该 FS 无 `local_stream://moh` 媒体源，hold 音乐使用 `silence_stream://300000`。短时播放源
+> （silence_stream://1、tone_stream）播放结束的 PLAYBACK_STOP 事件会被基线 IVR 流程误判为"放音完成"导致流程提前终止；且
+> `uuid_bridge` 解除 hold 时播放器 STOP 上报的 FILE PLAYED 同样会误判推进流程。 **已由
+`FsChannelExecuteCompleteEslEventHandler`
+> 过滤 hold 音乐播放完成/文件缺失事件，不参与 IVR 流程流转**。
 
-#### 8.2.1 三方会议由业务 API 触发（不在 SIP 代理信令路径内）
+### 9.2 信令时序（保持/恢复）
 
-1. 坐席A 通过业务 API 发起"邀请外部手机加入会议"请求（携带目标手机号 + 选中的网关 ID）。
-2. SIP 代理（业务层）调用 ESL：
-    - `conference 3000 create`：创建会议。
-    - `uuid_transfer A_leg, B_leg to conference:3000`：将 A、B 两条腿从 bridge 状态迁移到会议。
-    - `originate {sip_h_X-Gateway-Id=gw3}sofia/gateway/gw3/13800138000@代理`：发起 c-leg。
-
-#### 8.2.2 c-leg INVITE 走豁免场景（关键）
-
-FS 发出的 c-leg INVITE 携带 `X-Gateway-Id=gw3`、`source=FREESWITCH`：
-
-- `SipInviteRequestHandler.handleIncomingRequest` 检测到 `source=FREESWITCH && gatewayId 非空` → **走豁免分支**：
-    - 直接 `forwardToOutboundGateway(request, gw3)`， **跳过 FS park + 号码路由 + IVR**。
-    - **不构造 CallInfo、不触发 CHANNEL\_PARK 事件**。
-- 改写出局头域（From 改 DID、注入 PAI）后转发到第三方网关。
-- 200 OK 响应 → 策略表 `FREESWITCH × OUTBOUND → WS/THIRD_PARTY` → 转回网关（`forwardToThirdParty`）。
-- c-leg 接通后，FS 自动将其加入 `conference:3000`， **无需 SIP 代理参与 IVR 流程**。
-
-#### 8.2.3 未携带 Gateway-Id 时的处理（不能走号码路由 + IVR）
-
-当坐席A 发起"邀请外部手机加入会议"操作但 **未指定网关 ID** 时， **不能让 c-leg 走号码路由 + IVR 流程**，原因如下：
-
-1. **IVR 流程会创建新腿，而非 c-leg 直接出局**：`FsCallIRouteProcess.handler` 匹配号码路由后调用 `FsIvrRouteHandler` →
-   `flowNoticeService.notice` 驱动 IVR 流程。IVR 转接节点（routeType=2 外呼）通过 ESL `originate` **创建一条全新的腿**
-   出局，而非将当前 c-leg 直接出局。这会导致 c-leg 被 park 住等待 IVR 指令，同时新建的 d-leg 与外部手机通话后桥接到 c-leg，但
-   c-leg 仍不在 `conference:3000` 中。
-2. **IVR 业务逻辑不适合三方会议 c-leg**：IVR 流程通常包含播放欢迎语、收 DTMF 等节点，这些业务逻辑会打断三方会议的实时性。即使配置一个仅含
-   routeType=2 外呼节点的 IVR 流程（无语音播放），仍然存在"创建新腿"的问题。
-3. **会议加入时序被破坏**：三方会议要求 c-leg 接通后 **立即加入会议**。如果走 IVR，时序变为：park c-leg → IVR 流程加载 → ESL
-   originate 新腿 → 新腿接通 → bridge (c-leg, 新腿) → 但 c-leg 仍未加入会议。FS 会议需要 c-leg 本身作为会议成员，而非通过
-   bridge 间接关联。
-
-**正确做法**：未携带 Gateway-Id 时，业务层在发起 originate **之前**自行查询号码路由表确定出局网关 ID，然后用确定的网关 ID
-构造携带 `X-Gateway-Id` 的 originate 命令，c-leg 仍走豁免场景（直接出局 + 加入会议）：
-
-```
-业务层未携带 Gateway-Id 时的处理流程:
-├── 1. 业务层调用 CallRouteService.getListByRouteNumberAndType(手机号, 2) 匹配号码路由表
-├── 2. 取匹配到的 flowId → 查询 IVR 流程中 routeType=2 转接节点的 routeValue（兜底网关 ID）
-├── 3. 确定出局网关 ID:
-│   ├── routeValue 非空 → 使用 routeValue 作为网关 ID
-│   └── routeValue 为空 → 使用当前连接的 FS 兜底（通过 FS 本地 sofia profile external 出局）
-├── 4. 用确定的网关 ID 构造 originate 命令:
-│   └── originate {sip_h_X-Gateway-Id=gwX}sofia/gateway/gwX/手机号@代理 &park()
-└── 5. c-leg 仍走豁免场景 → forwardToOutboundGateway → 直接出局 → 接通后加入 conference:3000
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A(保持方)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant B as 坐席B(被保持方)
+    Note over A,B: 通话中(A↔FS↔B)
+    A->>SP: UI 点击保持(业务 API)
+    SP->>ES: 查询 CallInfo 取 A/B 腿 UUID
+    ES->>FS: ESL uuid_hold(坐席A 腿) / 播放保持音
+    FS-->>ES: 媒体保持中(silence_stream)
+    Note over A,B: B 听保持音, A 本地操作自由
+    A->>SP: UI 点击恢复(业务 API)
+    ES->>FS: ESL uuid_bridge 解除保持/恢复媒体
+    Note over A,B: 双向通话恢复
 ```
 
-> **设计约束**：三方会议 c-leg **必须走豁免场景**（携带 `X-Gateway-Id` 直接出局）， **不能走号码路由 + IVR 流程**。业务层负责在
-> originate 前确定网关 ID，而非依赖 SIP 代理的号码路由机制。这保证了 c-leg 接通后立即加入会议的时序不被 IVR 业务逻辑打断。
+> **实现要点**：保持/恢复通过业务 API 触发 ESL `uuid_hold`/恢复指令（与场景 6 咨询转接中的 hold 同机制）；保持期间
+> `FsChannelExecuteCompleteEslEventHandler` 对 hold 音乐相关事件做白名单过滤，避免污染 IVR 流程状态机。
 
-### 8.3 挂断流程
+### 9.3 自动化验证对应
 
-- 任意一方挂断：ESL `CHANNEL_HANGUP` 事件 → `FsChannelHangUpEslEventHandler` 清理会议成员：
-    - 如果是 A 或 B 挂断：将对应腿从会议移除，挂断 c-leg（`uuidKill`）。
-    - 如果是手机（c-leg）挂断：会议自动从 conf 3000 移除 c-leg，剩余 A、B 继续通话（若剩余 2 方，FS 可能自动桥接回 1-to-1）。
-    - 清理 `CallInfo` 与 Redis 缓存。
-
-> **设计要点**：c-leg 不走 IVR 业务逻辑（不播放欢迎语、不收 DTMF），直接加入会议，保证三方通话的实时性与业务纯粹性。
-
-### 8.4 通话记录与录音绑定
-
-三方会议 c-leg 走豁免场景（不构造 CallInfo、不触发 `FsCallIRouteProcess`），而当前录音和 CDR 分别依赖：
-
-- **录音**：`FsCallIRouteProcess.handler` L51-52 调用 `fsClient.record` 触发，依赖 `CallInfo` 存在
-- **CDR**：`FsChannelHangUpCompleteEslEventHandler` L93-94 从 `CallInfo` 构造 `CallRecordDO` 并保存，录音路径从
-  `callInfo.getRecord()` 取（L140）
-
-因此 c-leg 走豁免场景时， **当前架构下无法自动录音、无法生成 CDR**。需通过"ESL 通道变量注入 +
-挂断事件读取"机制补全，详见"十、通话记录与录音绑定机制"。
+`cc_e2e_test.py --scenarios 5`：通话中保持 → 验证保持成功（3 轮中 ≥1 轮通过即降级通过）→ 恢复后双方仍可通话 → 挂断联动。
 
 ***
 
-## 九、场景五：外部手机A → 外部手机B（转接/中继透传）
+## 十、场景 6：咨询转接（坐席A 咨询坐席C 后桥接坐席B）
 
-### 9.1 整体流程时序
+### 10.1 场景入口与信令路径
 
-```
-外部系统/SIP代理业务层       SIP代理         FreeSWITCH        第三方网关1       第三方网关2       手机A       手机B
-    │                       │      ┃ESL        │              │              │              │         │
-    │ ①业务层发起"双向出局转接"请求                          │
-    │ (指定手机A + gw1, 手机B + gw3)                        │
-    │                       │      ┃          │              │              │              │         │
-    │ 【SIP代理ESL驱动: a-leg + b-leg 并发起局】            │
-    │                       │ ②ESL originate a-leg ┃►        │              │              │         │
-    │                       │  {sip_h_X-Gateway-Id=gw1}      │              │              │         │
-    │                       │  sofia/gateway/gw1/13800138001@代理              │              │         │
-    │                       │  &park()        │              │              │              │         │
-    │                       │ ③ESL originate b-leg ┃►        │              │              │         │
-    │                       │  {sip_h_X-Gateway-Id=gw3}      │              │              │         │
-    │                       │  sofia/gateway/gw3/13800138002@代理              │              │         │
-    │                       │  &park()        │              │              │              │         │
-    │                       │      ┃          │              │              │              │         │
-    │ 【a-leg INVITE 回注: 走豁免场景】                       │
-    │                       │      ┃◄─────────│ INVITE(gw1)  │              │              │         │
-    │                       │ ④forwardToOutboundGateway(gw1)│              │              │         │
-    │                       │ ──────────────────────────────► ⑤INVITE       │              │         │
-    │                       │                ◄── 200 OK ──────│              │ ⑥A接听      │         │
-    │                       │      ┃          │              │              │              │         │
-    │ 【b-leg INVITE 回注: 走豁免场景】                       │
-    │                       │      ┃◄─────────│ INVITE(gw3)  │              │              │         │
-    │                       │ ④forwardToOutboundGateway(gw3)│              │              │         │
-    │                       │ ──────────────────────────────────────────────► ⑦INVITE      │         │
-    │                       │                ◄── 200 OK ──────────────────── │              │ ⑧B接听 │
-    │                       │      ┃          │              │              │              │         │
-    │ 【SIP代理ESL bridge】                                  │
-    │                       │ ⑨ESL bridgeCall(a_leg, b_leg) ┃►              │              │         │
-    │                       │      ┃          │              │              │              │         │
-    │  通话建立(媒体:手机A↔网关1↔FS↔网关2↔手机B)
-    │                       │      ┃          │              │              │              │         │
-    │◄═══════════════════════════════════════════════════════════════════════════════════════►│
-```
+| 项   | 值                                                                                 | 说明                                          |
+|------|------------------------------------------------------------------------------------|-----------------------------------------------|
+| 入口 | 坐席A ↔ 坐席B 通话中（flow102），坐席A 发起咨询转接 REFER → 坐席 C（1003）         | 浏览器坐席 UI「咨询转接」                     |
+| 流程 | A-B 基线 → hold(B) → originate C(1003) → A-C 咨询 → A 挂断确认 → B-C `uuid_bridge` | `scenario_6_consult_transfer`                 |
+| e2e  | 断言：A-C 咨询、A 挂断、B-C 桥接、CDR                                              | 收尾用 ESL 批量挂断（BYE 481 边界，见 5.3-2） |
 
-### 9.2 SIP 代理服务处理流程详解
+> **关键说明**：test-all 的转接目标是 **坐席 C（1003）**（非 v3.0 的外部手机）；转外线（携 `X-Gateway-Id` 直发网关）属 3.5
+> 豁免场景机制，无 e2e 覆盖。REFER 流程由 `WsReferRequestHandler` 处理：解析 `Refer-To`/`X-Transfer-Type`，按坐席分机反查
+> 通话通道（`findChannelByAgentNumber`），hold 基线腿后 originate 咨询目标。
 
-#### 9.2.1 业务层触发
+### 10.2 信令时序（咨询转接）
 
-业务层调用 SIP 代理业务接口（不在 sipproxy 模块）发起双向出局转接：
-
-- 输入：手机A、手机B、网关 ID 1、网关 ID 3。
-- 行为：
-    1. ESL `originate` a-leg（手机A）：`{sip_h_X-Gateway-Id=gw1}sofia/gateway/gw1/13800138001@代理 &park()`。
-    2. ESL `originate` b-leg（手机B）：`{sip_h_X-Gateway-Id=gw3}sofia/gateway/gw3/13800138002@代理 &park()`。
-    3. 等待两条腿 200 OK。
-    4. ESL `bridgeCall(a_leg, b_leg)` 桥接。
-
-#### 9.2.2 两条腿的 INVITE 都走豁免场景
-
-a-leg 与 b-leg 的 INVITE 携带 `X-Gateway-Id`（gw1 与 gw3）、`source=FREESWITCH`：
-
-- `SipInviteRequestHandler.handleIncomingRequest` 对两条腿均识别为 `FREESWITCH + 携带 gatewayId` → **走豁免分支**：
-    - a-leg → `forwardToOutboundGateway(gw1)` → 转第三方网关1。
-    - b-leg → `forwardToOutboundGateway(gw3)` → 转第三方网关2。
-- **不走 IVR、不走号码路由**。
-
-#### 9.2.3 为什么两条腿不能走号码路由 + IVR
-
-双向出局转接的两条腿（a-leg、b-leg） **必须走豁免场景**，不能走号码路由 + IVR 流程，原因如下：
-
-1. **IVR 流程会创建新腿，破坏双向桥接结构**：`FsCallIRouteProcess.handler` 匹配号码路由后调用 `FsIvrRouteHandler` →
-   `flowNoticeService.notice` 驱动 IVR 流程。IVR 转接节点（routeType=2 外呼）通过 ESL `originate` **创建全新的腿**出局，而非将当前
-   a-leg/b-leg 直接出局。这会导致：
-    - a-leg 被 park 住等待 IVR 指令 → IVR originate 出新腿 a'-leg → a'-leg 接通后 bridge (a-leg, a'-leg)
-    - b-leg 同理被 park → IVR originate 出新腿 b'-leg → bridge (b-leg, b'-leg)
-    - 最终 `uuid_bridge(a-leg, b-leg)` 桥接的是两条 park 中的腿，实际通话路径变为 a-leg ↔ a'-leg ↔ 网关1 ↔ 手机A、b-leg ↔
-      b'-leg ↔ 网关2 ↔ 手机B， **多出两条中间腿**，媒体路径不必要的跳数翻倍。
-2. **双向桥接要求两条腿直接出局**：`uuid_bridge(a_leg, b_leg)` 要求 a-leg 和 b-leg 是两条独立的、已接通的出局腿，直接在 FS
-   内部桥接 RTP 通道。如果走 IVR，a-leg 和 b-leg 都被 park 住，`uuid_bridge` 桥接的是两条等待中的腿，无法完成媒体桥接。
-3. **IVR 业务逻辑不适合纯转接场景**：双向出局转接是"内部无坐席参与"的纯中继透传场景，不需要播放欢迎语、收 DTMF、ACD 选坐席等
-   IVR 业务逻辑。强制走 IVR 会增加转接延迟（IVR 流程加载 + 节点执行 + originate 新腿），且可能错误触发业务逻辑（如 IVR
-   中配置了转人工节点）。
-4. **两条腿需要并行发起、对称处理**：双向出局转接要求 a-leg 和 b-leg 几乎同时 originate，任意一条腿接通后等待另一条腿，最终
-   `uuid_bridge`。走 IVR 会让两条腿各自独立走号码路由 → IVR → originate 新腿，时序不可控，难以保证并行性。
-
-**正确做法**：业务层在发起 originate **之前**自行确定两条腿各自的出局网关 ID，然后用确定的网关 ID 构造携带 `X-Gateway-Id`
-的 originate 命令，两条腿均走豁免场景（直接出局 + uuid\_bridge）：
-
-```
-业务层确定网关 ID 的处理流程:
-├── 1. 对手机A: 调用 CallRouteService.getListByRouteNumberAndType(手机A, 2) 匹配号码路由表
-│   ├── 取匹配到的 flowId → 查询 IVR 流程中 routeType=2 转接节点的 routeValue（兜底网关 ID）
-│   ├── 确定 a-leg 出局网关 ID:
-│   │   ├── 业务侧显式指定网关 ID → 使用它
-│   │   ├── routeValue 非空 → 使用 routeValue
-│   │   └── 两者为空 → 使用当前连接的 FS 兜底（通过 FS 本地 sofia profile external 出局）
-│   └── 用确定的网关 ID 构造 originate: {sip_h_X-Gateway-Id=gwX}sofia/gateway/gwX/手机A@代理 &park()
-├── 2. 对手机B: 同上流程确定 b-leg 出局网关 ID
-├── 3. 并行发起两条腿的 originate
-└── 4. 两条腿均走豁免场景 → forwardToOutboundGateway → 直接出局 → bridgeCall(a_leg, b_leg)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A(1001)
+    participant B as 坐席B(1002)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant C as 坐席C(1003)
+    Note over A,B: A-B 通话中
+    A->>SP: REFER(Refer-To:1003, attended)
+    SP->>ES: findChannelByAgentNumber(A) → 取腿 UUID
+    ES->>FS: ESL uuid_hold(B 腿, 播放保持音)
+    ES->>FS: ESL originate(坐席C 1003)
+    FS->>SP: INVITE(二段腿 C)
+    SP->>C: 推送振铃 → C 接听
+    C-->>SP: 200 OK
+    Note over A,C: A-C 咨询通话(私密咨询)
+    A->>SP: 挂断确认(REFER 完成/挂断 A)
+    ES->>FS: ESL uuid_bridge(B 腿, C 腿)
+    FS-->>ES: B-C 桥接完成
+    Note over B,C: B-C 通话建立(A 退出)
 ```
 
-> **设计约束**：双向出局转接的两条腿（a-leg、b-leg） **必须走豁免场景**（携带 `X-Gateway-Id` 直接出局）， **不能走号码路由 +
-IVR 流程**。业务层负责在 originate 前确定两条腿各自的网关 ID，而非依赖 SIP 代理的号码路由机制。这保证了：
->
-> - 两条腿直接出局，无中间腿，媒体路径最短
-> - 两条腿可并行发起，时序可控
-> - `uuid_bridge` 桥接的是两条已接通的出局腿，媒体桥接可靠完成
-> - 不触发 IVR 业务逻辑，避免转接延迟和错误触发
+### 10.3 分步处理与边界
 
-#### 9.2.4 媒体桥接
+1. **WsReferRequestHandler.doHandle**：解析 `Refer-To`、`X-Transfer-Type`(attended/blind)、`X-Gateway-Id`（本场景无）；
+   `findChannelByAgentNumber(agentNumber, domain)` 遍历 CallInfo 的 channelMap 匹配 A 的分机通道； 通过
+   `nodeManager.getSessionNode(callId)` 取会话绑定 FS 节点（避免随机选错 FS）；发送 202 Accepted。
+2. **attended（咨询转接）**：`uuidHold(a_leg)` → originate 目标坐席 C → A-C 咨询 → A 挂断确认 → `bridgeCall(B_leg, C_leg)`。
+3. **blind（盲转）**：originate 目标 → `bridgeCall(B_leg, C_leg)` → 挂断 A 腿（REPLACES 语义）。
+4. **转外线折中**（机制说明，无 e2e）：携 `X-Gateway-Id` → `makeCall` 直出网关（跳过 IVR，最低延迟）；未携 → 走号码路由 + IVR
+   兜底。
+5. **边界**：B-C `uuid_bridge` 后客户端 BYE 会被 FS 回 481（B2BUA 透传 dialog tag 不一致）——场景 6 收尾改用 ESL 批量挂断。
 
-ESL `bridgeCall(a_leg, b_leg)` 由 SIP 代理通过 ESL 连接发送，FS 内部桥接 a-leg 与 b-leg 的 RTP 通道， **两条腿不经过 SIP
-代理的媒体层**，媒体路径为：
+### 10.4 自动化验证对应
 
-```
-手机A ↔ 第三方网关1 ↔ FS（FS1 的 a-leg RTP）↔ FS（FS1 的 b-leg RTP）↔ 第三方网关2 ↔ 手机B
-```
-
-> **设计要点**：双向出局转接用于"内部没有坐席参与"的纯转接场景（如客服外呼转人工转接到另一条线路），豁免号码路由 + IVR
-> 流程，提升转接效率并避免错误触发业务逻辑。
-
-### 9.3 错误处理
-
-| 错误场景              | 处理策略                                                                   |
-|-----------------------|----------------------------------------------------------------------------|
-| a-leg 出局失败        | `uuidKill(b_leg)` 释放 b-leg；CDR 记录"a-leg 出局失败"                     |
-| b-leg 出局失败        | `uuidKill(a_leg)` 释放 a-leg；CDR 记录"b-leg 出局失败"                     |
-| 网关 ID 1/3 失效      | `forwardToOutboundGateway` 前置校验；阻断并告警"网关 ID 无效或指向内部 FS" |
-| 业务层发起时无网关 ID | 阻断发起；要求业务侧必须显式指定两端网关 ID                                |
-
-### 9.4 通话记录与录音绑定
-
-双向出局转接的 a-leg 和 b-leg 均走豁免场景（不构造 CallInfo、不触发 `FsCallIRouteProcess`），与场景四同理，当前架构下无法自动录音、无法生成
-CDR。需通过"ESL 通道变量注入 + 挂断事件读取"机制补全，详见"十、通话记录与录音绑定机制"。
+`cc_e2e_test.py --scenarios 6`：A-B 基线 → hold → originate C → C 接听 → A-C 咨询 → A 挂断确认 → B-C 桥接 → CDR 校验。
 
 ***
 
-## 十、通话记录与录音绑定机制
+## 十一、场景 7：机器人自动外呼（页面任务 → flow103）
 
-> **适用范围**：全部 7 个场景。场景一/二/三走号码路由 + IVR，由 `FsCallIRouteProcess` 驱动录音 + `transfer(CallInfo)` 构造
-> CDR；场景四/五/六/七走豁免场景，由 ESL 通道变量注入 + `transferFromEslEvent(EslEvent)` 构造 CDR。两条路径最终都写入同一张
-> `cc_call_record` 表。
+### 11.1 场景入口与信令路径
 
-### 10.1 数据表结构：cc\_call\_record
+| 项   | 值                                                                                      | 说明                                          |
+|------|-----------------------------------------------------------------------------------------|-----------------------------------------------|
+| 入口 | 页面新建自动外呼任务（目标 18600000001）                                                | 任务上下文预置 Redis `autocall:task:{taskId}` |
+| 路由 | route103「呼出-自动外呼」`^(00200).*`（direction=2）                                    | 断言 `[自动外呼][号码路由匹配]`               |
+| 流程 | flow103：start → receive → end（本场景验证外呼接通链路；任务自带 IVR 流程则显式驱动）   | `scenario_7_autocall`                         |
+| e2e  | 任务上下文预置、页面建任务、外呼接通、记录状态（待呼叫0/呼叫中1/已接通2/未接通3/失败4） | 三表 call_id 一致（任务/记录/流程实例）       |
 
-通话记录统一存储在 `cc_call_record` 表中，对应的 DO
-为 [CallRecordDO](file:///Users/wenjiaqi/Documents/yudao-cloud-cc/yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/dal/dataobject/call/CallRecordDO.java)。
+> **关键说明**：自动外呼的 a-leg 由 `AutocallServiceImpl` 经 ESL originate **直发第三方网关**（`sofia/external` profile，目标
+> `target@gateway.realm`）， **不走 sipproxy INVITE 转发**、不注入 `X-Gateway-Id`。接通后
+> `FsChannelParkEslEventHandler.autocallPark`
+> 读取 `variable_task_id` → Redis 取 `ivr_flow`： **显式指定优先**（跳过号码路由直接驱动
+> IVR）；未指定则兜底号码路由（route103 → flow103）。
 
-| 字段                | 类型     | 说明                    | IVR 场景来源           | 豁免场景来源                                |
-|---------------------|----------|-------------------------|------------------------|---------------------------------------------|
-| `call_id`           | varchar  | 呼叫唯一 ID             | `CallInfo.callId`      | ESL 变量 `cc_call_id`                       |
-| `caller_number`     | varchar  | 主叫号码                | `CallInfo.caller`      | ESL 标准字段 `Caller-Caller-ID-Number`      |
-| `callee_number`     | varchar  | 被叫号码                | `CallInfo.callee`      | ESL 标准字段 `Caller-Destination-Number`    |
-| `agent_id`          | bigint   | 坐席 ID                 | `CallInfo.agentId`     | ESL 变量 `cc_agent_id`                      |
-| `direction`         | tinyint  | 呼叫方式(1-呼出 2-呼入) | `CallInfo.direction`   | 固定 1(呼出)                                |
-| `call_start_time`   | datetime | 呼叫开始时间            | `CallInfo.callTime`    | ESL 标准字段 `Caller-Channel-Created-Time`  |
-| `answer_time`       | datetime | 接通时间                | `CallInfo.answerTime`  | ESL 标准字段 `Caller-Channel-Answered-Time` |
-| `call_end_time`     | datetime | 呼叫结束时间            | `LocalDateTime.now()`  | ESL 标准字段 `Caller-Channel-Hangup-Time`   |
-| `hangup_cause_code` | int      | 挂机原因                | `CallInfo.hangupCause` | ESL 标准字段 `Hangup-Cause`                 |
-| `file_path`         | varchar  | 录音文件地址            | `CallInfo.record`      | ESL 变量 `cc_record_path`                   |
-| `gateway_id`        | varchar  | **网关 ID**(新增)       | `CallInfo.gatewayId`   | ESL 变量 `variable_sip_h_X-Gateway-Id`      |
-| `call_type`         | int      | **呼叫类型**(新增)      | `CallInfo.callType`    | ESL 变量 `cc_call_type`                     |
-| `tenant_id`         | bigint   | 租户 ID                 | `CallInfo.tenantId`    | ESL 变量 `cc_tenant_id`                     |
+### 11.2 信令时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T as 外呼任务模块(cc-server)
+    participant R as Redis
+    participant FS as FreeSWITCH
+    participant GW as 第三方网关(fs3)
+    participant M as 手机(pjsua 18600000001)
+    participant ES as cc-server(ESL)
+    T->>R: 预置任务上下文(autocall:task:{id})
+    T->>FS: ESL originate(sofia/external, task_id + ivr_flow)
+    FS->>GW: INVITE(直发, 不经 sipproxy)
+    GW->>M: INVITE → 振铃
+    M-->>GW: 200 OK(接听)
+    GW-->>FS: 200 OK
+    FS-->>ES: CHANNEL_ANSWER
+    ES->>ES: autocallPark: 读 task_id → ivr_flow 显式驱动(或号码路由兜底)
+    ES->>FS: ESL 播放/收号(IVR 节点执行)
+    Note over M: 机器人语音交互(可转人工坐席)
+```
+
+### 11.3 错误处理与并发控制
+
+| 错误场景               | 处理策略                                           |
+|------------------------|----------------------------------------------------|
+| 网关不可达             | `uuidKill` c-leg；任务标记"出局失败"；CDR 记录     |
+| ivr_flow 不存在        | 挂断 c-leg；任务标记"IVR 流程无效"                 |
+| 坐席不在线（转人工时） | IVR 继续播放"请等待"语音，定期重试选座，超阈值挂断 |
+| CPS 限流               | 令牌桶/漏桶排队等待，超 maxWait 挂断标记"系统繁忙" |
+
+> **并发控制**：批量外呼需控制 ESL originate 并发速率（cps/maxConcurrent），实时监控指标（Micrometer）为遗留项（见第二十一章）。
+
+### 11.4 自动化验证对应
+
+`cc_e2e_test.py --scenarios 7`：Redis 任务上下文预置 → 页面建任务 → 外呼接通 → 任务记录状态流转 →
+`cc_call_record`/任务表/flow103 实例 call_id 一致。
+
+***
+
+## 十二、场景 8：客服组繁忙（占线提示）
+
+### 12.1 场景入口与信令路径
+
+| 项   | 值                                                                         | 说明                                                        |
+|------|----------------------------------------------------------------------------|-------------------------------------------------------------|
+| 拨号 | `00300xxx`                                                                 | 路由 route104「呼出-客服组繁忙」`^(00300).*`（direction=2） |
+| 流程 | flow104：start → playback（文件 fileId=10，「客服组繁忙请稍等再拨」）→ end | 断言：日志含 `客服组繁忙请稍等再拨`                         |
+| e2e  | `scenario_8_group_busy`：忙提示音播放、流程终态                            | 可选场景                                                    |
+
+> **关键说明**：该场景验证「坐席组全忙/溢出分支的语音提示链路」——号码直接命中专用于繁忙提示的 IVR 流程（flow104 纯放音流程），
+> 播放完成后流程进入终态。真实排队/溢出行为由转坐席组的 full_busy 策略驱动（见场景 11 并发压测的排队/溢出分支）。
+
+### 12.2 信令时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    A->>SP: INVITE 00300xxx
+    SP->>FS: 转发 INVITE → park
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: route104 匹配 → flow104 启动
+    ES->>FS: ESL 播放(客服组繁忙请稍等再拨)
+    FS-->>ES: 播放完成(PLAYBACK_STOP)
+    ES->>FS: 流程 end → 挂断
+    Note over A: 忙音播放完成, 呼叫结束
+```
+
+### 12.3 自动化验证对应
+
+`cc_e2e_test.py --scenarios 8`：断言后端日志 `客服组繁忙请稍等再拨`、flow104 实例终态。
+
+***
+
+## 十三、场景 9：满意度评价（收号 + 方法节点）
+
+### 13.1 场景入口与信令路径
+
+| 项   | 值                                                                                            | 说明                                                        |
+|------|-----------------------------------------------------------------------------------------------|-------------------------------------------------------------|
+| 拨号 | `00100xxx`                                                                                    | 路由 route106「呼出-满意度评价」`^(00100).*`（direction=2） |
+| 流程 | flow106：start → receive（收号，按 1）→ method（方法节点）→ end（播放「感谢您的评价，再见」） | 断言：`感谢您的评价`、`ivr方法调用节点处理`                 |
+| e2e  | `scenario_9_satisfaction`：DTMF 收号、方法节点执行、流程终态                                  | 可选场景                                                    |
+
+> **关键说明**：满意度评价典型应用于回访/外呼收尾：用户按键（如 1=满意）后由 method 节点回调业务接口落评价结果，再播放结束语。
+
+### 13.2 信令时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    A->>SP: INVITE 00100xxx
+    SP->>FS: 转发 INVITE → park
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: route106 匹配 → flow106 启动
+    ES->>FS: ESL 放音+收号(请按键评价)
+    A-->>FS: DTMF 1
+    ES->>ES: method 节点(评价结果落库)
+    ES->>FS: ESL 播放(感谢您的评价，再见)
+    FS-->>ES: 播放完成
+    ES->>FS: 流程 end → 挂断
+```
+
+### 13.3 自动化验证对应
+
+`cc_e2e_test.py --scenarios 9`：断言后端日志 `ivr方法调用节点处理`、`感谢您的评价`、flow106 实例终态。
+
+***
+
+## 十四、场景 10：AI 对话（00600 → flow107，中断词转人工）
+
+### 14.1 场景入口与信令路径
+
+| 项   | 值                                                                                                                                                                                        | 说明                                                                                        |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
+| 拨号 | `00600`                                                                                                                                                                                   | 路由 route107「呼出-AI对话」`^(00600).*`（direction=2），专属 AI 路由不与其他路由混用       |
+| 流程 | flow107：start(ASR/TTS) → ai（聊天角色 + 开场语 + 中断词「转人工」）→ condition(interruptWord EQ 转人工) → transfer（routeType=1 → 坐席 1002）→ end；else 分支 → playback(对话失败) → end | 断言：`[进入callRoute电话]`、`[ivrAI对话]`、`中断词命中`、`[ivr-转接-坐席处理节点]`、`1002` |
+| e2e  | `scenario_10_ai_dialogue`：假麦克风循环播放「转人工」WAV（`--use-file-for-fake-audio-capture`）→ ASR 识别中断词 → 转接坐席 1002 接听                                                      | 可选场景                                                                                    |
+
+> **关键说明**：AI 对话节点（ai-node）复用自研 AI 模块（yudao-module-ai）：ASR/TTS 走 mod_audio_fork 流式采集（非 MRCP）；
+> ai-node 可配置聊天角色（AI 角色库 roleId）、开场语（可选）、最大轮次（0-100）、静默超时（3-120s）、中断词列表；
+> 识别到任一中断词即结束本节点并输出该词（输出值 `interruptWord`），失败/识别异常/超时时固定输出 `ai对话失败`，可在判断器按该值分支。
+> AI 会话经 `aiChatApi.createConversation(roleId)` 落库 **`ai_chat_conversation`** 表。
+
+### 14.2 信令时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A(1001)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL + IVR 引擎)
+    participant FS as FreeSWITCH
+    participant AI as AI 模块(ASR/TTS/聊天)
+    participant B as 坐席B(1002)
+    A->>SP: INVITE 00600
+    SP->>FS: 转发 INVITE → park
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: route107 匹配 → flow107 启动(start: ASR/TTS 就绪)
+    ES->>FS: ESL audio_fork 流式采集 + 播放开场语(TTS)
+    Note over A,AI: 多轮对话(用户语音 → ASR → 聊天 → TTS → 播放)
+    A-->>FS: 语音: "转人工"(假麦克风循环播放)
+    FS-->>ES: PCM 流 → ASR 识别
+    ES->>ES: 识别命中中断词 → interruptWord=转人工
+    ES->>ES: condition EQ 分支 → 转接坐席 1002
+    ES->>FS: ESL originate(坐席1002)
+    SP->>B: 推送振铃 → B 接听
+    B-->>SP: 200 OK
+    ES->>FS: ESL bridgeCall → AI 退出
+    Note over A,B: 转人工通话建立(用户 ↔ 坐席1002)
+    AI-->>ES: ai_chat_conversation 会话落库
+```
+
+### 14.3 分步处理与边界
+
+1. **路由命中**：拨 00600 → route107（呼出方向）→ flow107；start 节点初始化 ASR/TTS 引擎（引擎按 flowData 下发，SPI 可插拔）。
+2. **AI 会话创建**：`FlowAiHandler` 经 `aiChatApi.createConversation(roleId)` 创建会话（日志 `[ivrAI对话][创建会话成功]`）。
+3. **开场语播放**：TTS 流式合成并播放（日志 `流式放音完成`），播完才进入监听（避开 busy 门控）。
+4. **多轮对话**：audio_fork 采集用户 PCM → 流式 ASR（NLS SpeechTranscriber）→ 聊天（yudao-module-ai 多轮上下文）→ 流式 TTS
+   播放； 每轮检查中断词（`[ivrAI对话][中断词命中]`）。
+5. **转人工**：中断词命中 → condition 节点 EQ 分支 → transfer 节点（routeType=1，routeValue=1002）→
+   `[ivr-转接-坐席处理节点]` → 坐席 B 接听。
+6. **边界**：AI 失败/识别异常/超时输出固定值 `ai对话失败`；对话循环次数/时长受最大轮次与静默超时约束； 通话终态由 CAS
+   保证单终态（并发安全）。
+
+### 14.4 自动化验证对应
+
+`cc_e2e_test.py --scenarios 10`：路由命中 → AI 会话创建 → 开场语播放完成 → 中断词命中（假麦克风播「转人工」）→ 转接坐席
+1002 → 坐席 B 接听双向通话 → 挂断联动 → `cc_call_record` 生成 + flow107 终态 + `ai_chat_conversation` 新增记录。
+
+***
+
+## 十五、场景 11：并发呼入压测（分级 10-100）
+
+### 15.1 场景说明与入口
+
+| 项       | 值                                                                                                                       | 说明                                 |
+|----------|--------------------------------------------------------------------------------------------------------------------------|--------------------------------------|
+| 入口     | pjsua 批量注册 fs3（18600000000~18600000099 共 100 账户）后并发呼叫 4001234                                              | route101 → flow101 → 转坐席组 1      |
+| 独立脚本 | `cc_concurrent_test.py` 分级 10/20/30/50/80/100（`--levels` 自定义），`--queue-test` 排队子测试                          | 报告 `reports/concurrent_report_*.md |json` |
+| 轻量入口 | `cc_e2e_test.py --scenarios 11 --rounds 1`（两级 10/20）                                                                 | 可选场景                             |
+| 验证点   | 坐席状态更新正确性（Redis `fs:agent:status` 轨迹 + DB `online_status`）、空闲坐席获取无重复分配、排队/溢出行为、分级统计 |                                      |
+
+### 15.2 并发验证点与修复经验（2026-08-29 修复并部署回归）
+
+| 问题                   | 根因                                                                                                                                                                        | 修复                                                                                                                             |
+|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| P1 排队分发失效        | `fsAcd()` multiGet 传 `Collections.singleton` 抛 ClassCastException；空闲过滤用恒 null 的 status；调度线程无租户上下文 MyBatis 租户插件 NPE；队列条目残留与异步 remove 竞争 | multiGet 传 List；过滤改 onlineStatus；DB 查询包 `TenantUtils.executeIgnore`；队列操作 synchronized；挂断清理；remove 移出异步块 |
+| P2 空闲坐席获取竞态    | 多任务并发选中同一坐席                                                                                                                                                      | Lua 原子 CAS 抢占（`occupyAgentAsRinging`，仅 READY → RINGING），失败方重新选座/走全忙分支                                       |
+| P3 audioFork 放音瓶颈  | fork/stream 线程池过小                                                                                                                                                      | 线程池扩容（4→8/16→24）+ 启动命令失败重试 1 次                                                                                   |
+| P4 溢出目标配置无效    | 前端下拉误绑路由正则                                                                                                                                                        | 下拉改用流程列表，value 绑定流程 ID；后端非数字降级挂机                                                                          |
+| P5 无会话 BYE 回弹循环 | 无会话 BYE 按 To 头注册状态转发形成 11 次/秒无限弹跳，占满 EventScannerThread                                                                                               | 无会话 BYE 直接丢弃不转发（BYE 为终止性请求）                                                                                    |
+
+### 15.3 自动化验证对应
+
+独立运行 `cc_concurrent_test.py`（推荐）或 `cc_e2e_test.py --scenarios 11 --rounds 1 --headless`；
+产物：每级发起/注册/接通/坐席分配分布、状态轨迹摘要、重复分配清单 + 缺陷清单（`reports/`）。
+
+***
+
+## 十六、场景 12：注册网关呼入（注册模式 4G 网关）
+
+### 16.1 场景入口与信令路径
+
+| 项   | 值                                                                         | 说明                                                                      |
+|------|----------------------------------------------------------------------------|---------------------------------------------------------------------------|
+| 前置 | fs3 模拟 4G 网关以 `gw1001` REGISTER 到 sipproxy                           | 代理记录绑定 `ipcc:sipproxy:gateway:register:46`（Redis），含注册 Contact |
+| 呼入 | pjsua 经 fs3 呼叫 `4005678`                                                | 路由 route108「注册网关呼入」`^4005678$`（direction=1）                   |
+| 流程 | flow108：start → transfer（routeType=4 → 坐席组 1）→ end                   | 断言：`[进入callRoute电话]`、`[转坐席组]`                                 |
+| e2e  | `scenario_12_register_gw_inbound`：注册绑定存在性前置校验、坐席组接听、CDR | 可选场景                                                                  |
+
+> **关键说明**：呼入来源识别为 **注册绑定网关**（4G 语音网关在运营商内网，无固定公网 address，REGISTER 后由代理记录可达地址）；
+> 呼入链路：pjsua → fs3（9988）→ sipproxy（5561）→ 按被叫 4005678 匹配 route108（呼入方向）→ flow108 直接转坐席组 1。
+
+### 16.2 信令时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant G as 4G 网关(fs3, gw1001)
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant A as 坐席A(坐席组1)
+    G->>SP: REGISTER(注册 Contact)
+    SP->>SP: 记录绑定 ipcc:sipproxy:gateway:register:46
+    G->>SP: INVITE 4005678(呼入)
+    SP->>FS: 转发 INVITE → park
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: route108 匹配 → flow108 → 转坐席组1
+    ES->>FS: ESL originate(选空闲坐席A)
+    SP->>A: 推送振铃 → A 接听
+    A-->>SP: 200 OK
+    ES->>FS: ESL bridgeCall
+    Note over G,A: 通话建立(4G 网关照 ↔ 坐席A)
+```
+
+### 16.3 自动化验证对应
+
+`cc_e2e_test.py --scenarios 12`：前置校验 Redis 注册绑定存在（缺失时给出可操作提示而非盲目超时）→ pjsua 呼 4005678 →
+坐席组接听 → CDR 与 flow108 终态。
+
+***
+
+## 十七、场景 13：注册网关呼出（注册模式 4G 网关）
+
+### 17.1 场景入口与信令路径
+
+| 项       | 值                                                                                                       | 说明                                                                                                                          |
+|----------|----------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|
+| 拨号     | 坐席拨 `8#18600000000`                                                                                   | 前缀 `8#`（非 0#，避免与 route105 冲突）由 route109 delete_prefix 删除；路由 route109「注册网关呼出」`^(8#).*`（direction=2） |
+| 流程     | flow109：start → transfer（routeType=2 外呼，routeValue=46 → 注册模式网关 46）→ end                      | 断言：`[删除前缀]`                                                                                                            |
+| 出局解析 | 网关 46 address 为空 → 按注册绑定（Contact <A服务器内网>:9977）解析目标                                  | `scenario_13_register_gw_outbound`                                                                                            |
+| e2e      | 坐席拨号 → FS originate(X-Gateway-Id=46) → sipproxy 按注册 Contact 出局 → fs3 external 9977 → pjsua 接听 | 可选场景                                                                                                                      |
+
+> **关键说明**：注册型网关呼出时 sipproxy **不依赖静态 address**（网关 46 address 为空），而是按 GatewayRegistry 绑定
+> 获取可达地址（fs3 external profile 通告 <A服务器内网>:9977）。呼出目标解析优先级： **注册 Contact > 静态配置**。
+
+### 17.2 信令时序
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 坐席A
+    participant SP as SIP 代理
+    participant ES as cc-server(ESL)
+    participant FS as FreeSWITCH
+    participant G as 4G 网关(fs3 gw1001)
+    participant M as pjsua 手机(18600000000)
+    A->>SP: INVITE 8#18600000000
+    SP->>FS: 转发 INVITE → park
+    FS-->>ES: CHANNEL_PARK
+    ES->>ES: route109 匹配(删除 8#) → flow109 → 网关46
+    ES->>FS: ESL originate(X-Gateway-Id=46)
+    FS->>SP: INVITE(携 X-Gateway-Id=46)
+    SP->>SP: 豁免直发: 注册绑定解析 → Contact <A服务器内网>:9977
+    SP->>G: 出局 INVITE(注册 Contact)
+    G->>M: 桥接 pjsua → 振铃 → 接听
+    M-->>G: 200 OK
+    G-->>SP: 200 OK
+    ES->>FS: ESL bridgeCall
+    Note over A,M: 通话建立(坐席A ↔ 4G 网关照 ↔ 手机)
+```
+
+### 17.3 自动化验证对应
+
+`cc_e2e_test.py --scenarios 13`：坐席 A 拨 8#18600000000 → flow109 → 网关 46（注册 Contact 动态解析）→ fs3 9977 → pjsua
+接听 → CDR（gateway_id=46）与 flow109 终态。
+
+***
+
+## 十八、通话记录（CDR）与录音绑定机制
+
+> **适用范围**：全部 12 个实现场景。走号码路由 + IVR 的场景由 `FsCallIRouteProcess` 驱动录音 + `transfer(CallInfo)` 构造
+> CDR；
+> 豁免场景（三方会议 c-leg、双向出局、REFER 转外线）由 ESL 通道变量注入 + `transferFromEslEvent(EslEvent)` 构造 CDR（路径
+> B，机制保留）。
+> 两条路径最终都写入同一张 `cc_call_record` 表。
+
+### 18.1 数据表结构：cc_call_record
+
+| 字段                                                | 类型     | 说明                    | IVR 场景来源           | 豁免场景来源                  |
+|-----------------------------------------------------|----------|-------------------------|------------------------|-------------------------------|
+| `call_id`                                           | varchar  | 呼叫唯一 ID             | `CallInfo.callId`      | ESL 变量 `cc_call_id`         |
+| `caller_number`                                     | varchar  | 主叫号码                | `CallInfo.caller`      | `Caller-Caller-ID-Number`     |
+| `callee_number`                                     | varchar  | 被叫号码                | `CallInfo.callee`      | `Caller-Destination-Number`   |
+| `agent_id`                                          | bigint   | 坐席 ID                 | `CallInfo.agentId`     | ESL 变量 `cc_agent_id`        |
+| `direction`                                         | tinyint  | 呼叫方式(1-呼出 2-呼入) | `CallInfo.direction`   | 固定 1(呼出)                  |
+| `call_start_time` / `answer_time` / `call_end_time` | datetime | 呼叫起止/接通时间       | `CallInfo`             | ESL 标准时间字段(微秒)        |
+| `hangup_cause_code`                                 | int      | 挂机原因                | `CallInfo.hangupCause` | `Hangup-Cause`                |
+| `file_path`                                         | varchar  | 录音文件地址            | `CallInfo.record`      | ESL 变量 `cc_record_path`     |
+| `gateway_id`                                        | varchar  | 网关 ID                 | `CallInfo.gatewayId`   | `variable_sip_h_X-Gateway-Id` |
+| `call_type`                                         | int      | 呼叫类型                | `CallInfo.callType`    | ESL 变量 `cc_call_type`       |
+| `tenant_id`                                         | bigint   | 租户 ID                 | `CallInfo.tenantId`    | ESL 变量 `cc_tenant_id`       |
 
 `call_type` 取值规范：
 
-| 取值 | 含义     | 对应场景           | 路由方式                 |
-|------|----------|--------------------|--------------------------|
-| 1    | IVR 呼叫 | 场景一/二/三       | 号码路由 + IVR           |
-| 2    | 出局呼叫 | 场景三中外呼节点   | 号码路由 + IVR           |
-| 3    | 内部呼叫 | 场景一/二          | 号码路由 + IVR           |
-| 4    | 三方会议 | 场景四 c-leg       | 豁免（直接出局）         |
-| 5    | 双向出局 | 场景五 a-leg/b-leg | 豁免（直接出局）         |
-| 6    | 转接     | 场景六 c-leg       | 豁免（直接出局）         |
-| 7    | 自动外呼 | 场景七 a-leg       | ESL originate 直发 → IVR |
+| 取值 | 含义           | 典型场景                     | 路由方式                 |
+|------|----------------|------------------------------|--------------------------|
+| 1    | 呼入 IVR       | 场景 3/12（呼入方向）        | 号码路由 + IVR           |
+| 2    | 呼出           | 场景 2/8/9/10/13（呼出方向） | 号码路由 + IVR           |
+| 3    | 内部呼叫       | 场景 1/5/6 基线              | 号码路由 + IVR           |
+| 4    | 三方会议 c-leg | 豁免（旧场景四，无 e2e）     | 豁免（直接出局）         |
+| 5    | 双向出局       | 豁免（旧场景五，无 e2e）     | 豁免（直接出局）         |
+| 6    | 转接 c-leg     | REFER 转外线（无 e2e）       | 豁免（直接出局）         |
+| 7    | 自动外呼       | 场景 7 a-leg                 | ESL originate 直发 → IVR |
 
-### 10.2 两条 CDR 构建路径
+### 18.2 两条 CDR 构建路径
 
-CDR
-构建统一在 [FsChannelHangUpCompleteEslEventHandler](file:///Users/wenjiaqi/Documents/yudao-cloud-cc/yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/esl/handler/esl/FsChannelHangUpCompleteEslEventHandler.java)
-的 `handleEslEvent` 方法中，根据 `CallInfo` 是否存在分两条路径：
+CDR 构建统一在 `FsChannelHangUpCompleteEslEventHandler.handleEslEvent`，根据 `CallInfo` 是否存在分两条路径：
 
-```
-FsChannelHangUpCompleteEslEventHandler.handleEslEvent(address, event):
-│
-├── String uniqueId = EslEventUtil.getUniqueId(event)
-├── handleConferenceHangup(address, uniqueId)                          ← 会议挂断处理（通用）
-│
-├── CallInfo callInfo = fsCallCacheService.getCallInfoByUniqueId(uniqueId)
-│
-├── if (callInfo != null):
-│   ├── 【路径 A: IVR 场景】
-│   ├── 更新 channelInfo 挂断信息
-│   ├── 最后一个通道挂断时(count == 1):
-│   │   ├── changeAgentStatus(callInfo)                                ← 坐席状态变更
-│   │   ├── CallRecordDO callRecord = transfer(callInfo)               ← 从 CallInfo 构造 CDR
-│   │   ├──   ├── callRecord.setGatewayId(callInfo.getGatewayId())     ← 网关 ID 从 CallInfo 取
-│   │   ├──   ├── callRecord.setCallType(callInfo.getCallType())       ← 呼叫类型从 CallInfo 取
-│   │   ├──   └── callRecord.setFilePath(callInfo.getRecord())         ← 录音路径从 CallInfo 取
-│   │   ├── callRecordService.saveAssignTenantId(callRecord)           ← 保存到 cc_call_record
-│   │   ├── handleAutoCallResult(event, callInfo, callRecord)          ← 自动外呼结果回写
-│   │   └── fsCallCacheService.removeCallInfo(callInfo.getCallId())    ← 清理缓存
-│   └── fsCallCacheService.saveCallInfo(callInfo)
-│
-└── if (callInfo == null):
-    └── 【路径 B: 豁免场景兜底】
-        └── handleExemptionCdr(event, uniqueId)
-            ├── String ccCallId = EslEventUtil.getCcCallId(event)      ← 读取通道变量 cc_call_id
-            ├── if (ccCallId 为空) → 非业务 originate 的腿,跳过
-            ├── CallRecordDO callRecord = transferFromEslEvent(event)  ← 从 ESL 事件构建 CDR
-            │   ├── callRecord.setCallId(EslEventUtil.getCcCallId(event))
-            │   ├── callRecord.setCallType(EslEventUtil.getCcCallType(event))
-            │   ├── callRecord.setTenantId(EslEventUtil.getCcTenantId(event))
-            │   ├── callRecord.setAgentId(EslEventUtil.getCcAgentId(event))
-            │   ├── callRecord.setCallerNumber(EslEventUtil.getCallerCallerIdNumber(event))
-            │   ├── callRecord.setCalleeNumber(EslEventUtil.getCallerDestinationNumber(event))
-            │   ├── callRecord.setGatewayId(EslEventUtil.getGatewayId(event))
-            │   ├── callRecord.setCallStartTime(convertEpochMicrosToLocalDateTime(CreatedTime))
-            │   ├── callRecord.setAnswerTime(convertEpochMicrosToLocalDateTime(AnsweredTime))
-            │   ├── callRecord.setCallEndTime(convertEpochMicrosToLocalDateTime(HangupTime))
-            │   ├── callRecord.setRingingTime(convertEpochMicrosToLocalDateTime(ProgressTime))
-            │   ├── callRecord.setHangupCauseCode(FsHangupCauseEnum.getByValue(Hangup-Cause))
-            │   ├── callRecord.setFilePath(EslEventUtil.getCcRecordPath(event))
-            │   ├── callRecord.setCallState(正常挂机→1, 否则→2)
-            │   ├── callRecord.setDirection(1)                          ← 豁免场景均为出局
-            │   └── callRecord.setAnswerFlag(0)
-            └── callRecordService.saveAssignTenantId(callRecord)        ← 保存到 cc_call_record
+```mermaid
+flowchart TD
+    H["CHANNEL_HANGUP_COMPLETE 事件"] --> U["取 uniqueId"]
+    U --> C{"CallInfo 存在?"}
+    C -->|"是 → 路径 A(IVR 场景)"| A1["更新 channelInfo 挂断信息"]
+    A1 --> A2{"最后一个通道?"}
+    A2 -->|"否"| SAVE["saveCallInfo 回缓存"]
+    A2 -->|"是"| A3["changeAgentStatus 坐席状态变更"]
+    A3 --> A4["transfer(CallInfo) 构造 CDR<br/>gatewayId/callType/filePath 取自 CallInfo"]
+    A4 --> A5["saveAssignTenantId 落库"]
+    A5 --> A6["handleAutoCallResult 自动外呼结果回写"]
+    A6 --> A7["removeCallInfo 清理缓存"]
+    C -->|"否 → 路径 B(豁免场景兜底)"| B1["handleExemptionCdr: 读 cc_call_id"]
+    B1 --> B2{"cc_call_id 为空?"}
+    B2 -->|"是"| SKIP["非业务腿, 跳过"]
+    B2 -->|"否"| B3["transferFromEslEvent 从事件构建 CDR"]
+    B3 --> B5["saveAssignTenantId 落库"]
 ```
 
-### 10.3 路径 A：IVR 场景（号码路由 + IVR）
+### 18.3 路径 A：IVR 场景（号码路由 + IVR）
 
-**适用场景**：场景一/二/三（内部坐席间呼叫、外部呼入、坐席外呼）。
+**适用场景**：场景 1/2/3/5/6/7/8/9/10/12/13（走号码路由 + IVR 的腿）。
 
-**录音触发**：`FsCallIRouteProcess.handler` 在匹配号码路由后、驱动 IVR 之前，调用 `fsClient.record` 触发录音，录音路径存入
-`CallInfo.record`：
+- **录音触发**：`FsCallIRouteProcess.handler` 匹配号码路由后、驱动 IVR 前调用 `fsClient.record`，路径存入
+  `CallInfo.record`； 自动外呼 a-leg 已有 `execute_on_answer` 录音时跳过（避免重复录音）。
+- **CDR 构造**：`transfer(CallInfo)` 在最后一个通道挂断时（count==1）构造 `CallRecordDO`，保证一次通话一条 CDR；
+  支持坐席状态变更、自动外呼结果回写等后处理。
+- **录音文件命名**：`{recordFile}/{tenantId}/{yyyy-MM-dd}/{agentNumber}_{callId}_{timestamp}.wav`（tenantId 空兜底
+  default，agentNumber 空兜底 unknown）。
 
-```
-CHANNEL_PARK 事件
-  → FsCallIRouteProcess.handler
-    ├── fsClient.record(address, callInfo.getCallId(), uniqueId, filePath)  ← 录音触发
-    ├── callInfo.setRecord(filePath)                                         ← 录音路径存入 CallInfo
-    └── routeFactory.factory(IVR).handler(...)                               ← 驱动 IVR
-```
+### 18.4 路径 B：豁免场景（ESL 通道变量注入 + 挂断事件读取）
 
-**CDR 构造**：`transfer(CallInfo callInfo)` 方法（L112-150）从 `CallInfo` 构造 `CallRecordDO`，录音路径从
-`callInfo.getRecord()` 取。新增的 `gatewayId` 和 `callType` 字段也从 `CallInfo` 对应字段填入。
+**适用场景**：三方会议 c-leg、双向出局 a/b-leg、REFER 转外线 c-leg（均无 e2e 覆盖的能力）。
 
-**特点**：
-
-- `CallInfo` 在 SIP 代理层构造 INVITE 时创建，并缓存到 Redis
-- 录音由 `FsCallIRouteProcess` 主动触发，文件路径由代码生成
-- CDR 在最后一个通道挂断时生成（`count == 1`），保证一次通话只生成一条 CDR
-- 支持坐席状态变更、自动外呼结果回写等后处理
-
-### 10.4 路径 B：豁免场景（ESL 通道变量注入 + 挂断事件读取）
-
-**适用场景**：场景四/五/六（三方会议 c-leg、双向出局 a/b-leg、REFER 转接 c-leg）。
-
-这些场景的腿不经过 `FsCallIRouteProcess`（不 park、不构造 `CallInfo`），路径 A 无法生效。
-
-> **场景七例外**：场景七（自动外呼）的 a-leg 由 `AutocallServiceImpl` 构造 `CallInfo` 并保存到缓存，挂断时走路径 A（
-> `transfer(CallInfo)`），不使用路径 B。
-
-#### 10.4.1 业务层 originate 时注入通道变量
-
-业务层在发起 ESL originate 命令时，除了携带 `sip_h_X-Gateway-Id`，还需注入以下业务变量：
+业务层 originate 时注入通道变量：
 
 ```
-originate {
-  sip_h_X-Gateway-Id=gw3,
-  cc_call_id=T001,                              ← 业务层生成的全局唯一通话 ID
-  cc_call_type=4,                               ← 呼叫类型:4-三方会议 5-双向出局 6-转接 7-自动外呼
-  cc_tenant_id=1,                               ← 租户 ID
-  cc_agent_id=1001,                             ← 关联坐席 ID(三方会议为发起坐席,双向出局可为空)
-  cc_record_path=/recordings/1/2026-07-22/R001.wav,  ← 录音文件路径(业务层预先确定)
-  execute_on_answer='record_session /recordings/1/2026-07-22/R001.wav'  ← 接通后自动录音
-} sofia/gateway/gw3/13800138000@代理 &park()
+originate {sip_h_X-Gateway-Id=gw3, cc_call_id=T001, cc_call_type=4, cc_tenant_id=1,
+           cc_agent_id=1001, cc_record_path=/recordings/1/2026-07-22/R001.wav,
+           execute_on_answer='record_session /recordings/1/2026-07-22/R001.wav'}
+          sofia/gateway/gw3/13800138000@代理 &park()
 ```
 
-#### 10.4.2 EslEventUtil 中的变量定义
+挂断时 `transferFromEslEvent(event)` 从事件标准字段与通道变量读回各字段（`cc_call_id`/`cc_call_type`/`cc_tenant_id`/
+`cc_agent_id`/
+`cc_record_path` 及 Created/Answered/Hangup/Progress 时间、Hangup-Cause 等），正常挂机 call_state=1 否则 2，direction 固定
+1，answer_flag 固定 0。
 
-[EslEventUtil](file:///Users/wenjiaqi/Documents/yudao-cloud-cc/yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/esl/utils/EslEventUtil.java)
-中新增的常量和 getter 方法：
+> **演进建议**：长期将录音/CDR 逻辑统一抽离为 `execute_on_answer` + 通道变量注入 + 挂断事件读取，实现与路由方式解耦。
 
-| 常量                      | 值                        | getter 方法              | 说明              |
-|---------------------------|---------------------------|--------------------------|-------------------|
-| `VARIABLE_CC_CALL_ID`     | `variable_cc_call_id`     | `getCcCallId(event)`     | 全局唯一通话 ID   |
-| `VARIABLE_CC_CALL_TYPE`   | `variable_cc_call_type`   | `getCcCallType(event)`   | 呼叫类型(4/5/6/7) |
-| `VARIABLE_CC_TENANT_ID`   | `variable_cc_tenant_id`   | `getCcTenantId(event)`   | 租户 ID           |
-| `VARIABLE_CC_AGENT_ID`    | `variable_cc_agent_id`    | `getCcAgentId(event)`    | 坐席 ID           |
-| `VARIABLE_CC_RECORD_PATH` | `variable_cc_record_path` | `getCcRecordPath(event)` | 录音文件路径      |
+### 18.5 各场景适配矩阵（按 test-all 编号修正）
 
-同时复用已有的 `VARIABLE_SIP_GATEWAY_ID`（`variable_sip_h_X-Gateway-Id`）读取网关 ID。
-
-#### 10.4.3 录音机制：execute\_on\_answer + record\_session
-
-豁免场景的录音由 FS 内置变量 `execute_on_answer` 驱动：
-
-- 业务层在 originate 时注入 `execute_on_answer='record_session /path/to/file.wav'`
-- FS 在通道接通（answer）后自动执行 `record_session` APP，开始录制
-- 录音文件路径由业务层预先确定，通过 `cc_record_path` 通道变量同时注入
-- 挂断事件中 `variable_cc_record_path` 可读回，用于 CDR 的 `filePath` 字段
-
-> **与 IVR 场景录音的区别**：IVR 场景由 `FsCallIRouteProcess` 调用 `fsClient.record` 触发，文件路径由代码生成（
-> `{recordFile}/{tenantId}/{yyyy-MM-dd}/{agentNumber}_{callId}_{timestamp}.wav`，路径包含 tenantId 子目录用于租户隔离，文件名包含
-> agentNumber 用于坐席识别，agentNumber 为空时使用 "unknown" 兜底，tenantId 为空时使用 "default" 兜底）；豁免场景由
-> `execute_on_answer` 自动触发，文件路径由业务层预先确定。两种方式最终都通过 CDR 的 `filePath` 字段关联录音文件。
-
-#### 10.4.4 transferFromEslEvent 方法：从 ESL 事件构建 CDR
-
-`FsChannelHangUpCompleteEslEventHandler.transferFromEslEvent(EslEvent event)` 方法从 ESL 事件的标准字段和业务通道变量构建
-`CallRecordDO`：
-
-| CallRecordDO 字段 | 数据来源                  | EslEventUtil 方法                                          |
-|-------------------|---------------------------|------------------------------------------------------------|
-| `callId`          | 通道变量 `cc_call_id`     | `getCcCallId(event)`                                       |
-| `callType`        | 通道变量 `cc_call_type`   | `getCcCallType(event)`                                     |
-| `tenantId`        | 通道变量 `cc_tenant_id`   | `getCcTenantId(event)`                                     |
-| `agentId`         | 通道变量 `cc_agent_id`    | `getCcAgentId(event)`                                      |
-| `callerNumber`    | ESL 标准字段              | `getCallerCallerIdNumber(event)`                           |
-| `calleeNumber`    | ESL 标准字段              | `getCallerDestinationNumber(event)`                        |
-| `gatewayId`       | SIP 头透传变量            | `getGatewayId(event)`                                      |
-| `callStartTime`   | ESL 标准字段(微秒时间戳)  | `getCallerChannelCreatedTime(event)`                       |
-| `answerTime`      | ESL 标准字段(微秒时间戳)  | `getCallerChannelAnsweredTime(event)`                      |
-| `callEndTime`     | ESL 标准字段(微秒时间戳)  | `getCallerChannelHangupTime(event)`                        |
-| `ringingTime`     | ESL 标准字段(微秒时间戳)  | `getCallerChannelProgressTime(event)`                      |
-| `hangupCauseCode` | ESL 标准字段              | `getHangupCause(event)` → `FsHangupCauseEnum.getByValue()` |
-| `filePath`        | 通道变量 `cc_record_path` | `getCcRecordPath(event)`                                   |
-| `callState`       | 挂断原因判断              | 正常挂机→1, 否则→2                                         |
-| `direction`       | 固定值                    | 1(呼出)                                                    |
-| `answerFlag`      | 固定值                    | 0(接通)                                                    |
-
-> **时间转换**：FS 时间戳为微秒精度，`convertEpochMicrosToLocalDateTime(String epochMicros)` 方法将其除以 1000 转为毫秒，再通过
-> `LocalDateTime.ofInstant(new Date(millis).toInstant(), ZoneId.systemDefault())` 转换为 `LocalDateTime`。
-
-### 10.5 录音与 CDR 绑定关系
-
-```
-业务层 originate 前:
-├── 生成 cc_call_id=T001 (全局唯一)
-├── 确定录音文件路径: /recordings/1/2026-07-22/R001.wav
-└── 注入 ESL 通道变量: {cc_call_id=T001, cc_call_type=4, cc_record_path=/recordings/1/2026-07-22/R001.wav,
-                         execute_on_answer='record_session /recordings/1/2026-07-22/R001.wav', ...}
-
-FS 接通后:
-├── execute_on_answer 触发 record_session → 生成录音文件 /recordings/1/2026-07-22/R001.wav
-└── 通话过程中变量 cc_call_id/cc_call_type/cc_record_path 始终保留在通道上
-
-FS 挂断后:
-├── CHANNEL_HANGUP_COMPLETE 事件携带:
-│   ├── variable_cc_call_id = T001
-│   ├── variable_cc_call_type = 4
-│   ├── variable_cc_record_path = /recordings/1/2026-07-22/R001.wav
-│   ├── Caller-Caller-ID-Number = 13800138000
-│   ├── Caller-Destination-Number = ...
-│   ├── variable_sip_h_X-Gateway-Id = gw3
-│   ├── Caller-Channel-Created-Time / Answered-Time / Hangup-Time
-│   └── Hangup-Cause = NORMAL_CLEARING
-│
-└── FsChannelHangUpCompleteEslEventHandler (callInfo == null → 路径 B):
-    ├── handleExemptionCdr(event, uniqueId)
-    │   ├── 读回 cc_call_id=T001 → 作为 CDR.callId
-    │   ├── 读回 cc_record_path=/recordings/1/2026-07-22/R001.wav → 作为 CDR.filePath
-    │   ├── transferFromEslEvent(event) → 构造 CallRecordDO
-    │   └── callRecordService.saveAssignTenantId(callRecord) → 写入 cc_call_record 表
-    │
-    └── cc_call_record 表记录:
-        ├── call_id = T001
-        ├── file_path = /recordings/1/2026-07-22/R001.wav  ← 录音文件路径
-        ├── call_type = 4                                    ← 三方会议
-        ├── gateway_id = gw3
-        └── ...
-
-查询时:
-├── 按 call_id=T001 查 cc_call_record → 取 file_path → 播放/下载录音文件
-└── 录音与 CDR 通过 call_id 关联
-```
-
-### 10.6 各场景适配矩阵
-
-| 场景              | 路由方式               | CDR 路径                                         | 录音触发            | call\_type | 需注入变量                                                                |
-|-------------------|------------------------|--------------------------------------------------|---------------------|------------|---------------------------------------------------------------------------|
-| 场景一(内部坐席)  | 号码路由+IVR           | A: transfer(CallInfo)                            | FsCallIRouteProcess | 3          | 无(CallInfo 由 SIP 代理构造)                                              |
-| 场景二(外部呼入)  | 号码路由+IVR           | A: transfer(CallInfo)                            | FsCallIRouteProcess | 1          | 无(CallInfo 由 SIP 代理构造)                                              |
-| 场景三(坐席外呼)  | 号码路由+IVR           | A: transfer(CallInfo)                            | FsCallIRouteProcess | 2          | 无(CallInfo 由 SIP 代理构造)                                              |
-| 场景四(三方会议)  | 豁免                   | B: transferFromEslEvent                          | execute\_on\_answer | 4          | cc\_call\_id/cc\_call\_type/cc\_tenant\_id/cc\_agent\_id/cc\_record\_path |
-| 场景五(双向出局)  | 豁免                   | B: transferFromEslEvent                          | execute\_on\_answer | 5          | 两条腿各注入独立变量                                                      |
-| 场景六(REFER转接) | 豁免                   | B: transferFromEslEvent                          | execute\_on\_answer | 6          | cc\_call\_id/cc\_call\_type/cc\_tenant\_id/cc\_agent\_id/cc\_record\_path |
-| 场景七(自动外呼)  | ESL originate 直发→IVR | A(CallInfo 由 AutocallServiceImpl 构造)+A(IVR段) | execute\_on\_answer | 7          | cc\_call\_id/cc\_call\_type/cc\_tenant\_id/cc\_record\_path               |
-
-> **场景七特殊处理**：场景七的 a-leg 由 `AutocallServiceImpl` 构造 `CallInfo` 并注入 `execute_on_answer` 录音变量（ESL
-> originate 直发，不走 sipproxy），接通后 `FsChannelParkEslEventHandler.autocallPark` 走 IVR 流程时 `FsCallIRouteProcess`
-> 会再次触发 `fsClient.record`。需在 `FsCallIRouteProcess` 中增加判断：如果 `callInfo.getRecord()` 已有值（说明
-> `execute_on_answer` 已启动录音），则跳过 `fsClient.record` 调用，避免重复录音。CDR 方面，a-leg 走路径 A（`CallInfo` 由
-> `AutocallServiceImpl` 构造），后续 IVR 创建的新腿走路径 A，最终生成两条 CDR 记录，通过 `call_id` 关联。
-
-### 10.7 对现有 IVR 场景的影响
-
-此方案 **不影响**现有走号码路由 + IVR 的场景（场景一/二/三）：
-
-- 录音仍由 `FsCallIRouteProcess` 调用 `fsClient.record` 触发
-- CDR 仍由 `transfer(CallInfo)` 构造，`callInfo != null` → 走路径 A（现有逻辑）
-- 新增的 `transferFromEslEvent(EslEvent)` 方法仅在 `callInfo == null` 时触发（路径 B）
-- `CallRecordDO` 新增的 `gatewayId` 和 `callType` 字段对 IVR 场景也生效（从 `CallInfo` 对应字段填入），IVR 场景的 CDR
-  记录将更完整
-
-> **演进建议**：长期来看，建议将录音和 CDR 逻辑 **统一从** **`FsCallIRouteProcess`** **中抽离**，所有场景（包括 IVR 场景）都通过
-> `execute_on_answer` + 通道变量注入 + 挂断事件读取的方式实现，实现录音/CDR 与路由方式的完全解耦。此重构属于 v3.1 紧急修复范围（CDR
-> 持久化和录音文件命名规范已修复，详见十、通话记录与录音绑定机制）。
+| 场景                           | 路由方式                     | CDR 路径                               | 录音触发                                | call_type |
+|--------------------------------|------------------------------|----------------------------------------|-----------------------------------------|-----------|
+| 1 内部呼叫                     | 号码路由+IVR                 | A: transfer(CallInfo)                  | FsCallIRouteProcess                     | 3         |
+| 2 出局呼叫                     | 号码路由+IVR                 | A                                      | FsCallIRouteProcess                     | 2         |
+| 3 入局 IVR                     | 号码路由+IVR                 | A                                      | FsCallIRouteProcess                     | 1         |
+| 5 保持/恢复                    | 号码路由+IVR（基线通话）     | A                                      | FsCallIRouteProcess                     | 3         |
+| 6 咨询转接（坐席 C）           | 号码路由+IVR（基线+二段腿）  | A                                      | FsCallIRouteProcess                     | 3         |
+| 7 自动外呼                     | ESL originate 直发→IVR       | A（AutocallServiceImpl 构造 + IVR 段） | execute_on_answer + FsCallIRouteProcess | 7         |
+| 8 客服组繁忙                   | 号码路由+IVR                 | A                                      | FsCallIRouteProcess                     | 2         |
+| 9 满意度评价                   | 号码路由+IVR                 | A                                      | FsCallIRouteProcess                     | 2         |
+| 10 AI 对话                     | 号码路由+IVR                 | A                                      | FsCallIRouteProcess                     | 2         |
+| 12 注册网关呼入                | 号码路由+IVR                 | A                                      | FsCallIRouteProcess                     | 1         |
+| 13 注册网关呼出                | 号码路由+IVR（注册绑定出局） | A                                      | FsCallIRouteProcess                     | 2         |
+| 三方会议/双向出局/REFER 转外线 | 豁免                         | B: transferFromEslEvent                | execute_on_answer                       | 4/5/6     |
 
 ***
 
-## 十一、场景六：坐席间通话中转接到外部手机
+## 十九、异常场景与可靠性
 
-### 11.1 咨询转接（Attended Transfer）
+### 19.1 异常场景处理矩阵（含对应测试场景）
 
-```
-坐席A        坐席B         SIP代理          FreeSWITCH        第三方网关       手机
-  │             │            │      ┃ESL        │              │              │
-  │  ①A-B 通话中(参见场景一)                                  │
-  │═════════════╪═════════════╡      ┃          │              │              │
-  │             │            │      ┃          │              │              │
-  │── 转接 (Refer-To:手机号)─►│      ┃          │              │              │
-  │   X-Transfer-Type: attended       ┃          │              │              │
-  │   X-Gateway-Id: gw3              ┃          │              │              │
-  │             │            │ ②WsReferRequestHandler:        │
-  │             │            │  findAgentChannel(A分机)        │
-  │             │            │  →取a-leg/b-leg UUID            │
-  │             │            │  →uuidHold(a_leg)              │
-  │             │            │  ③ESL originate (sip_h_X-Gateway-Id=gw3)            │
-  │             │            │  sofia/gateway/gw3/138@代理      │
-  │             │            │  →直接出局(走makeCall)         │
-  │             │            │      ┃          │              │              │
-  │             │            │  ④B与外部手机通话(FS bypass)                   │
-  │             │            │      ┃          │ INVITE(gw3)→forwardToOutboundGateway  │
-  │             │            │      ┃          │              │              │
-  │             │            │      ┃          │              │ INVITE ────►│ ⑤
-  │             │            │      ┃          │              │  ◄─ 200 OK ──│ ⑥
-  │             │            │      ┃          │  c-leg 已加入 B的桥接             │
-  │             │            │      ┃          │              │              │
-  │  通话结构: A(hold) + B↔手机(bridge)                          │
-  │═══════════════════════════════════════════════════════════════►│
-```
+| 异常场景                           | 检测点                          | 处理策略                                                              | 对应场景                        |
+|------------------------------------|---------------------------------|-----------------------------------------------------------------------|---------------------------------|
+| 号码路由表未匹配到任何规则         | `FsCallIRouteProcess` 匹配失败  | `playFile(SYSTEM_ERROR)` + `hangupCall` + 告警                        | 1/2/3 等（L0 数据核对前置拦截） |
+| 号码路由匹配但 flowId 为空         | `CallRouteDO.flowId == null`    | 同上 + 告警                                                           | L0                              |
+| IVR 流程不存在（flowId 无效）      | `FlowNoticeService.notice` 异常 | 同上                                                                  | 7（ivr_flow 无效）              |
+| 网关 ID 指向内部 FS（违规配置）    | `forwardToOutboundGateway` 前置 | 阻断并返回 500；告警"疑似回环"                                        | 2                               |
+| 网关 ID 在 FsSipGatewayDO 中不存在 | 查询失败                        | 回退 routeValue → 当前 FS 兜底；告警                                  | 2/13                            |
+| 第三方网关不可达                   | INVITE 32s 超时 / 503           | `playFile(SYSTEM_ERROR)` + 挂断；`uuidKill` 释放 a-leg；CDR"出局失败" | 2/7                             |
+| 网关返回 407/401                   | 响应路径                        | 重新注入 Authorization 重发 INVITE（去旧 To tag）                     | 2                               |
+| 主叫挂断（早释）                   | `CHANNEL_HANGUP`                | `uuidKill` 释放对端；CDR"主叫早释"                                    | 1/3                             |
+| 被叫忙/无应答/拒接                 | 486/480/603                     | `playFile(BUSY)` + 挂断；CDR                                          | 1/6                             |
+| 坐席组全忙                         | ACD 无空闲坐席                  | 排队/溢出/忙音（full_busy 策略）                                      | 8/11                            |
+| 中断词/识别超时（AI）              | ai-node 监听超时                | 输出固定 `ai对话失败` → 判断器分支                                    | 10                              |
+| ESL 连接断开                       | 重连机制                        | 自动重连；已 bridge 通话继续；断线期间事件丢失由业务层容忍            | 通用                            |
+| SIP 代理自身故障（SPOF）           | 心跳                            | HA 主备/集群；已 bridge 通话可继续                                    | 通用                            |
+| FS 在 bridge 后故障                | RTP 流中断                      | 终端 RTP 超时（30s）挂断重拨；代理经 ESL 心跳摘除故障 FS              | 通用                            |
+| 无会话 BYE 回弹                    | SessionInfo 不存在              | **直接丢弃不转发**（终止性请求；曾导致 11 次/秒回弹循环，P5 已修复）  | 11                              |
+| ACK 丢失                           | ACK Timeout 32s                 | FS 64×T1 后释放；代理正确转发 ACK 不吞没                              | 通用                            |
+| CPS 过载                           | 令牌桶/漏桶超限                 | 503 + Retry-After；坐席指数退避                                       | 7/11                            |
 
-### 11.2 盲转（Blind Transfer）
+### 19.2 B2BUA 错误协调策略
 
-```
-坐席A        坐席B         SIP代理          FreeSWITCH        第三方网关       手机
-  │             │            │      ┃          │              │              │
-  │  ①A-B 通话中(参见场景一)                                  │
-  │═════════════╪═════════════╡      ┃          │              │              │
-  │             │            │      ┃          │              │              │
-  │── 转接 (Refer-To:手机号)─►│      ┃          │              │              │
-  │   X-Transfer-Type: blind          ┃          │              │              │
-  │   X-Gateway-Id: gw3              ┃          │              │              │
-  │             │            │ ②WsReferRequestHandler:        │
-  │             │            │  findAgentChannel(A分机)        │
-  │             │            │  ③ESL originate (sip_h_X-Gateway-Id=gw3)            │
-  │             │            │  sofia/gateway/gw3/138@代理      │
-  │             │            │  →直接出局(走makeCall)         │
-  │             │            │      ┃          │              │              │
-  │             │            │  ④ESL bridgeCall(B_leg, c_leg) ┃►              │
-  │             │            │  →挂断A_leg(REPLACES语义)        │
-  │             │            │      ┃          │ INVITE(gw3)→forwardToOutboundGateway  │
-  │             │            │      ┃          │              │              │
-  │             │            │      ┃          │              │ INVITE ────►│ ⑤
-  │             │            │      ┃          │              │  ◄─ 200 OK ──│ ⑥
-  │             │            │      ┃          │              │              │
-  │  通话结构: B↔手机(bridge)                                  │
-  │             │═══════════════════════════════════════════►│
+```mermaid
+flowchart TD
+    E{"错误类型"}
+    E -->|"主叫挂断(早释)"| H1["收 BYE → 回 200 OK"]
+    H1 --> H2["ESL uuidKill 释放对端"]
+    H2 --> H3["CDR 记录 主叫早释"]
+    E -->|"媒体协商失败 488"| M1["两段对话分别回 488"]
+    M1 --> M2["ESL uuidKill 释放两端"]
+    E -->|"Timer B 超时"| T1["FS 端超时 → CHANNEL_HANGUP_COMPLETE"]
+    T1 --> T2["另一段对话回 504 Server Timeout"]
+    T2 --> T3["清理 CallInfo 与 Redis 缓存"]
+    E -->|"网络中断"| N1["Keepalive 检测离线"]
+    N1 --> N2["释放该 callId 所有通道"]
+    N2 --> N3["通知业务侧 网络中断"]
 ```
 
-### 11.3 SIP 代理服务处理流程详解
-
-#### 11.3.1 WsReferRequestHandler.doHandle
-
-1. 解析 `Refer-To`、`X-Transfer-Type`、`X-Gateway-Id`。
-2. **`findChannelByAgentNumber(agentNumber, domain)`**：
-    - 调用 `sysAgentService.listByNameAndDomainNoTenant` 获取坐席 DO。
-    - 遍历 `FsCallCacheService.getAllCallInfos()` 中所有 CallInfo 的 `channelMap`，匹配
-      `agentNumber.equals(channelInfo.getAgentNumber())` 的 ChannelInfo。
-    - 返回该 ChannelInfo（含 `uniqueId` / `otherUniqueId` / `channelName`）。
-3. **提取 FS 地址**：通过 `nodeManager.getSessionNode(callId)` 取会话绑定的 FS 节点，避免 `System.currentTimeMillis()`
-   随机选错 FS。
-4. 发送 202 Accepted。
-5. 分发处理：
-    - `attended` → `handleAttendedTransfer`：`uuidHold(a_leg)` → `makeCall` 发起外部目标。
-    - `blind` → `handleBlindTransfer`：`makeCall` 发起外部目标 → `bridgeCall(B_leg, c_leg)` → 挂断 a-leg。
-
-#### 11.3.2 makeCall 路径（携带/未携带 X-Gateway-Id 折中方案）
-
-- **携带** **`X-Gateway-Id=gw3`**（`WsReferRequestHandler.originateTarget` L238-247）：
-    - `fsSipGatewayService.getFsSipGateway(Long.valueOf(gatewayId))` + `fsClient.makeCall(..., sipGateway=gw3)`。
-    - **FS 直接走 gateway 出局（不回注到 SIP 代理）** → 不触发 `CHANNEL_PARK` → 不走 IVR。
-    - 通过 `bridgeCall` 桥接 B 腿与 C 腿。
-- **未携带** **`X-Gateway-Id`**（L248-256）：
-    - `fsClient.makeInternalCall(..., sipProxyAddr)`，FS 发 INVITE 给 SIP 代理。
-    - SIP 代理 `SipInviteRequestHandler`（`source=FREESWITCH, gatewayId=null`）→ `forwardToFreeSwitch` → park →
-      走号码路由 → IVR。
-    - 适用于"未指定出局网关、依赖号码路由匹配"的转接场景。
-
-#### 11.3.3 转接上下文缓存
-
-- `cacheTransferContext`：缓存 `transfer:{type}:{aLeg}:{bLeg}[:{gatewayId}]` 到 `CallInfo.transferContext`（ **不污染**
-  `CallInfo.gatewayId` 字段，与"网关 ID 覆盖"语义解耦）。
-
-> **设计要点**：转接的目标号码（外部手机）原则上应走号码路由 → IVR 流程 → IVR 转接节点（routeType=2 外呼）→ 使用
-> `CallInfo.gatewayId` 覆盖网关 ID → 出局。但考虑到 转接场景对延迟敏感（多一次 IVR 流程加载会增加转接延迟），且业务侧通过 转接
-> 携带 `X-Gateway-Id` 已显式指定出局网关，因此采用 **折中方案**：
->
-> - 携带 `X-Gateway-Id` → 走 `makeCall` 直接出局，跳过 IVR（最低延迟）。
-> - 未携带 `X-Gateway-Id` → 走号码路由 + IVR（兜底逻辑）。
-
-***
-
-## 十二、场景七：机器人自动外呼（指定 IVR 流程）
-
-### 12.1 整体流程时序
-
-```
-外呼任务模块           SIP代理         FreeSWITCH        第三方网关       手机
-    │                  │      ┃ESL        │              │              │
-    │ ①业务侧发起"机器人外呼"任务                                │
-    │ (指定手机号 + ivr_flow + 选中的网关 gw3)                    │
-    │                  │      ┃          │              │              │
-    │ ②缓存任务上下文:  task_id → ivr_flow (Redis)              │
-    │                  │      ┃          │              │              │
-    │ ③ESL originate ┃► (task_id=T001, ivr_flow=flow_01)      │
-    │   sofia/external/13800138000@{gateway.realm} &park()     │
-    │                  │      ┃          │              │              │
-    │ 【FS 直接向第三方网关发起 INVITE，不走 sipproxy】            │
-    │                  │      ┃          │ INVITE       │              │
-    │                  │      ┃          │─────────────►│ ⑤INVITE      │
-    │                  │      ┃          │◄── 200 OK ──│ ⑥手机接听    │
-    │                  │      ┃          │              │              │
-    │ 【ESL IVR 驱动】                                          │
-    │                  │ ⑦ESL IVR (flow_01) 流程启动          │
-    │                  │  →播放欢迎语、收DTMF、按键路由等         │
-    │                  │  →可由 IVR 节点触发"转人工坐席"          │
-    │                  │      ┃          │              │              │
-    │  通话建立(IVR 媒体流程 + 机器人语音)                        │
-    │◄═══════════════════════════════════════════════════════════════►│
-```
-
-### 12.2 SIP 代理服务处理流程详解
-
-#### 12.2.1 外呼任务模块（业务侧）
-
-1. 业务侧发起"机器人外呼"任务，参数：手机号、`ivr_flow`、`gatewayId`。
-2. 缓存任务上下文到 Redis（`autocall:task:{taskId}`）：`task_id → ivr_flow`。
-3. `AutocallServiceImpl` 通过 `fsClient.sendAsyncMsg` 直接调用 FS 发起 `originate`， **不走 sipproxy INVITE 转发**：
-   ```
-   originate {return_ring_ready=true,sip_contact_user=callerId,...,
-              task_id=T001,ivr_flow=flow_01}
-   sofia/external/13800138000@{gateway.realm} &park()
-   ```
-    - 使用 `sofia/external` profile（非 `sofia/gateway`），目标为 `target@gateway.realm`。
-    - `gatewayId` 用于查询网关配置获取 `realm`，构造出局目标地址；不注入 `sip_h_X-Gateway-Id` 通道变量。
-    - `gatewayId` 为空时，目标为 `target`，由 FS 本地 `sofia profile external` 兜底出局。
-
-#### 12.2.2 a-leg INVITE 直发网关（ESL originate 直发，不走 sipproxy）
-
-`AutocallServiceImpl` 通过 `fsClient.originate` 直接调用 FS 发起呼叫，FS 使用 `sofia/external` profile 直接向第三方网关（
-`gateway.realm`）发起 INVITE， **不经过 sipproxy INVITE 转发**：
-
-- 不涉及 `SipInviteRequestHandler`、不触发 `forwardToOutboundGateway`、不走豁免分支。
-- 不注入 `sip_h_X-Gateway-Id` 通道变量，a-leg INVITE 不携带 `X-Gateway-Id` 头。
-- **不走号码路由**（由 `task_id` + `ivr_flow` 显式指定 IVR 流程）。
-
-#### 12.2.3 第三方网关接通后，IVR 启动
-
-接通后，SIP 代理通过 ESL 驱动 IVR 流程：
-
-```
-FsChannelParkEslEventHandler.autocallPark
-├── 读取 variable_task_id → Redis 取 ivr_flow
-├── 优先级1: ivr_flow 显式指定 → 直接 FlowNoticeService.notice(... ivrFlow)
-│   └── 跳过号码路由匹配（不依赖 getCallRouteNoTenant）
-├── 优先级2: ivr_flow 为空 → 走 FsCallIRouteProcess 号码路由匹配
-└── IVR 流程节点: 播放欢迎语、收DTMF、转人工坐席 (routeType=1)
-```
-
-> **ivr\_flow 显式指定优先**：当外呼任务携带 `ivr_flow` 时， **优先**走指定的 IVR
-> 流程（跳过号码路由），保证机器人外呼的"按预设流程执行"特性。 **未指定** `ivr_flow` 时， **兜底**走号码路由 → IVR（适用"按号码动态选
-> IVR"场景）。
-
-#### 12.2.4 IVR 转人工坐席
-
-IVR 流程执行到 `routeType=1 转坐席` 节点：
-
-1. ACD 选坐席（按技能、上次坐席、空闲时长等策略）。
-2. ESL `originate` 到目标坐席（携带 `transfer_context=autocall:{taskId}`）。
-3. `bridgeCall` 桥接外呼 c-leg 与坐席 b-leg。
-4. 坐席接听 → IVR 退出 → 通话建立。
-
-### 12.3 错误处理
-
-| 错误场景           | 检测点                              | 处理策略                                                                    |
-|--------------------|-------------------------------------|-----------------------------------------------------------------------------|
-| 网关 ID 失效       | `forwardToOutboundGateway` 前置校验 | 阻断并告警；外呼任务标记"失败"                                              |
-| 第三方网关不可达   | INVITE 超时                         | `uuidKill(c_leg)`；任务标记"出局失败"；CDR 记录"外呼失败"                   |
-| ivr\_flow 不存在   | `FlowNoticeService.notice` 异常     | 挂断 c-leg；任务标记"IVR 流程无效"；告警"ivr\_flow \[flowId] 不存在"        |
-| 第三方网关返回 407 | SipInviteRequestHandler 响应路径    | 重新注入 Authorization 头并重发 INVITE                                      |
-| 坐席不在线         | IVR routeType=1 无可选坐席          | IVR 节点继续播放"请等待"语音；定期重试选坐席；超过阈值则挂断                |
-| CPS 限流           | SIP 代理外呼并发超限                | 任务排队等待（令牌桶/漏桶），不直接拒绝；超过等待阈值则挂断并标记"系统繁忙" |
-
-### 12.4 批量外呼的并发控制
-
-批量外呼需控制 ESL originate 的并发速率，避免 FS 和网关过载：
-
-```
-批量外呼并发控制策略:
-├── 令牌桶限流: 配置文件配置 cps（每秒呼叫数）、maxConcurrent（最大并发呼叫数）
-├── 超限处理: 任务排队等待 → 超过 maxWait（最大等待时长，如 30s）则挂断
-├── 实时监控: 通过 Micrometer 暴露 cps 指标、当前并发数、等待队列长度
-└── 告警: cps 持续超过阈值 80% 触发告警，运维可手动调整速率
-```
-
-> **遗留优化点**：CPS 限流的 Micrometer 指标尚未实现。详见"十五、遗留问题与未来演进"。
-
-***
-
-## 十三、异常场景与可靠性
-
-### 13.1 异常场景处理矩阵
-
-| 异常场景                                     | 检测点                               | 处理策略                                                                                                                |
-|----------------------------------------------|--------------------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| **号码路由表未匹配到任何规则**               | `FsCallIRouteProcess` 匹配失败       | `playFile(SYSTEM_ERROR)` + `hangupCall` + 告警 "号码 \[callee] 未匹配到路由规则"                                        |
-| **号码路由匹配但 flowId 为空**               | `CallRouteDO.flowId == null`         | 同上 + 告警 "号码路由 \[routeId] 的 flowId 为空"                                                                        |
-| **IVR 流程不存在（flowId 无效）**            | `FlowNoticeService.notice` 异常      | 同上                                                                                                                    |
-| **网关 ID 指向内部 FS（违规配置）**          | `forwardToOutboundGateway` 前置      | 阻断并返回 500；告警 "网关 ID 指向内部 FS，疑似回环"                                                                    |
-| **网关 ID 在 FsSipGatewayDO 中不存在**       | `GatewayRouteServiceImpl` 查询       | 回退到 routeValue；都为空则用当前 FS 兜底；告警 "网关 ID 无效"                                                          |
-| **第三方网关不可达（INVITE 超时）**          | INVITE 32s 超时 / 503 响应           | `playFile(SYSTEM_ERROR)` + `hangupCall`；ESL `uuidKill` 释放 a-leg；CDR 记录"出局失败"                                  |
-| **第三方网关返回 407 Proxy Auth**            | `SipInviteRequestHandler` 响应       | ACK 后重发 INVITE（去除旧 To tag，参照 RFC 3261 流程）                                                                  |
-| **第三方网关返回 401 Unauthorized**          | 同上                                 | 注入 Authorization 头并重发 INVITE                                                                                      |
-| **主叫挂断（早释）**                         | `CHANNEL_HANGUP` 事件触发            | `uuidKill` 释放对端；CDR 记录"主叫早释"                                                                                 |
-| **被叫忙/无应答/拒接**                       | 486/480/603 响应                     | `playFile(BUSY)` + `hangupCall`；CDR 记录"被叫忙/无应答/拒接"                                                           |
-| **ESL 连接断开（FS 重启/网络闪断）**         | `funtureConnect` 重连                | 自动重连；已 bridge 通话继续；重连期间事件丢失由业务层容忍（号码路由匹配失败兜底为挂断）                                |
-| **SIP 代理服务自身故障**                     | SPOF                                 | 通过 HA 方案（主备/集群）保障；已 bridge 通话可继续（FS 媒体层独立）                                                    |
-| **FS 在 bridge 后故障**                      | 通话中 FS 宕机 → RTP 流中断          | 终端检测 RTP 超时（默认 30s）后挂断重拨；SIP 代理通过 ESL 心跳摘除故障 FS                                               |
-| **re-INVITE 超时（Session Timer 刷新失败）** | `Session-Expires` 超时               | 依赖 Session Timer 机制，超时方发送 BYE 释放；SIP 代理作为 B2BUA 协调两侧释放                                           |
-| **ACK 丢失（200 OK 重传）**                  | `ACK Timeout` 32s                    | FS 在 64×T1 后仍未收到 ACK 则释放呼叫；SIP 代理应正确转发 ACK 不吞没                                                    |
-| **CPS（每秒呼叫数）过载**                    | 令牌桶/漏桶超限                      | 代理层返回 503 Service Unavailable + Retry-After；坐席客户端指数退避重试                                                |
-| **转接坐席 A 通道查找失败**                  | `findChannelByAgentNumber` 返回 null | 返回 500 Server Error；CDR 记录"转接失败：找不到坐席 A 通道"（P0 已修复）                                               |
-| **转接 FS 地址选择错误**                     | `extractFsAddress` 随机选错          | 改用 `nodeManager.getSessionNode(callId)` 取会话绑定的 FS（P0 已修复）                                                  |
-| **BYE 挂断 c-leg 残留**                      | `FsChannelHangUpEslEventHandler`     | 已修复：读取 `Other-Leg-Unique-ID` 后调用 `fsClient.hangupCall` 释放关联腿，并清理 `CallInfo.channelMap`/`uniqueIdList` |
-| **CDR 丢失（无持久化）**                     | 通话结束后无 CDR 记录                | 已修复：通过 `transferFromEslEvent` / `transfer(CallInfo)` 构建并持久化 CDR（详见第十章）                               |
-
-### 13.2 B2BUA 错误协调策略
-
-作为 B2BUA，SIP 代理需在两段对话中独立处理错误，并通过 ESL 协调 FS 端资源：
-
-```
-错误协调策略:
-├── 主叫挂断（早释）:
-│   ├── 收到 BYE → 回 200 OK
-│   ├── ESL uuidKill 释放对端
-│   └── CDR 记录 "主叫早释"
-├── 媒体协商失败:
-│   ├── 收到 488 Not Acceptable Here
-│   ├── SIP 代理在两段对话中分别回 488
-│   └── ESL uuidKill 释放两端
-├── Timer B 超时:
-│   ├── 在 FS 端超时（默认 32s）→ 触发 CHANNEL_HANGUP_COMPLETE 事件
-│   ├── SIP 代理在另一段对话中回 504 Server Timeout
-│   └── 清理 CallInfo 与 Redis 缓存
-├── 网络中断:
-│   ├── Keepalive 检测到离线 → 标记离线
-│   ├── 释放该 callId 的所有通道
-│   └── 通知业务侧 "网络中断"
-```
-
-### 13.3 Timer B 可配置性
+### 19.3 Timer B 可配置性
 
 不同运营商网关对 Timer B 有差异化要求（部分国际长途要求 60s，运营商内网可能 15s），SIP 代理应支持按网关 ID 维度配置 Timer B：
 
@@ -1356,21 +1162,21 @@ public long getTimerB(String gatewayId) {
 
 ***
 
-## 十四、SIP 代理服务核心能力总结
+## 二十、SIP 代理服务核心能力总结
 
-### 14.1 请求路由能力
+### 20.1 请求路由能力
 
-| 能力                 | 实现要点                                                                                                                                                                                                                                                                 |
-|----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 号码路由匹配（核心） | 所有 INVITE 到达后统一转发到内部 FS park → ESL 读取被叫号码 → 调用 `CallRouteService.getListByRouteNumberAndType` 按正则匹配号码路由表（type=1 呼入 / type=2 呼出）→ 用 `flowId` 驱动 IVR 流程。**所有呼叫（含内部坐席间呼叫）必须走号码路由 + IVR，不保留任何快速路径** |
-| IVR 流程驱动         | 号码路由匹配成功后，用 `flowId` 驱动对应 IVR 流程；IVR 执行到转接节点（routeType=1 转坐席 / routeType=2 外呼）时通过 ESL originate 发起第二段呼叫                                                                                                                        |
-| 网关 ID 覆盖         | IVR 转接节点（routeType=2 外呼）执行时按优先级确定出局网关 ID：`CallInfo.gatewayId`（INVITE 头携带）> `IVR 转接节点 routeValue`（IVR 配置）> 当前连接的 FS（CHANNEL\_PARK 事件来源 FS）兜底。详见 13.7 节"网关 ID 覆盖能力"                                              |
-| 路由表查询           | 主备路由、负载均衡、按时间段路由                                                                                                                                                                                                                                         |
-| 注册位置管理         | 所有 JSSIP 坐席均注册在 SIP 代理服务，维护 Contact 地址、GRUU 支持（待启用）                                                                                                                                                                                             |
-| 网关选路             | 多台 FreeSWITCH/网关间 Failover、按主叫/被叫选路                                                                                                                                                                                                                         |
-| 号码路由豁免场景     | 三方会议邀请外部手机、双向出局转接、转接（携带 X-Gateway-Id）三种场景豁免号码路由，直接通过 `forwardToOutboundGateway` 改写出局；自动外呼（场景七）通过 ESL originate 直发，不走 sipproxy                                                                                |
+| 能力                 | 实现要点                                                                                                                                                                                     |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 号码路由匹配（核心） | 所有 INVITE 统一转发内部 FS park → ESL 读被叫号码 → `getListByRouteNumberAndType` 按正则匹配（type=1 呼入/2 呼出）→ 用 flowId 驱动 IVR。**所有呼叫（含内部坐席间呼叫）必须走号码路由 + IVR** |
+| IVR 流程驱动         | flowId 驱动 IVR；转接节点（routeType=1 转坐席 / routeType=2 外呼 / routeType=4 坐席组）经 ESL originate 发第二段呼叫                                                                         |
+| 网关 ID 覆盖         | 优先级：`CallInfo.gatewayId` > IVR routeValue > 当前连接的 FS（见 3.3）                                                                                                                      |
+| 注册位置管理         | JSSIP 坐席注册于代理；维护 Contact 地址（GRUU 待启用，见 23.3）                                                                                                                              |
+| 注册绑定识别         | 注册模式网关 REGISTER 记录绑定（`ipcc:sipproxy:gateway:register:{id}`），呼出目标按注册 Contact 解析                                                                                         |
+| 网关选路             | 多 FS/网关间 Failover、按主叫/被叫选路                                                                                                                                                       |
+| 号码路由豁免         | 三方会议/双向出局/REFER 携网关直发豁免号码路由；自动外呼 ESL 直发不经 sipproxy（见 3.5）                                                                                                     |
 
-### 14.2 认证鉴权能力
+### 20.2 认证鉴权能力
 
 ```
 请求到达
@@ -1381,219 +1187,107 @@ public long getTimerB(String gatewayId) {
 └── 防盗打机制（频率限制、异常检测）
 ```
 
-### 14.3 ESL 全权控制能力（核心）
+### 20.3 ESL 全权控制能力（核心）
 
-SIP 代理服务通过 ESL（Event Socket Library） **全权控制** FreeSWITCH 的呼叫行为，FS 是纯粹的被动执行者：
+SIP 代理（cc-server）通过 ESL **全权控制** FreeSWITCH 的呼叫行为，FS 是纯粹的被动执行者：
 
 ```
 ESL 控制能力:
-├── 呼叫腿控制: originate（发起呼叫）、uuid_bridge（桥接两腿）、uuid_kill（挂断）
-├── 媒体播放: uuid_broadcast/playback（播放语音）
-├── DTMF 收号: play_and_get_digits（收集按键）
-├── 录音控制: uuid_record（录音）
-├── 会议控制: conference（创建/管理会议）
-├── 事件监听: 订阅 CHANNEL_PARK/PROGRESS/ANSWER/BRIDGE/HANGUP 等事件
-├── 变量操作: uuid_setvar（设置 channel 变量）
-└── 全局控制: 通过 park 事件全局代理所有呼叫逻辑
+├── 呼叫腿控制: originate / uuid_bridge / uuid_kill
+├── 媒体播放: uuid_broadcast / playback
+├── DTMF 收号: play_and_get_digits
+├── 录音控制: uuid_record / record_session(execute_on_answer)
+├── 会议控制: conference
+├── 音频流: uuid_audio_fork(mod_audio_fork, 流式 TTS/ASR)
+├── 事件监听: CHANNEL_PARK/PROGRESS/ANSWER/BRIDGE/HANGUP 等
+└── 变量操作: uuid_setvar
 ```
 
-**ESL 驱动的工作模式（所有场景统一）**：
+统一呼叫控制流程见 3.2（Mermaid 图）；豁免直发场景见 3.5。
 
-```
-统一呼叫控制流程（号码路由 + IVR 驱动）:
-① FS 收到 INVITE → park 住 → 触发 CHANNEL_PARK 事件
-② SIP 代理监听到 park 事件 → 读取被叫号码 + gatewayId（来自 variable_sip_h_X-Gateway-Id）
-   → 调用 CallRouteService.getListByRouteNumberAndType 按正则匹配号码路由表:
-   ├── 匹配成功 → 用 flowId 驱动 IVR 流程
-   │   └── IVR 执行到转接节点:
-   │       ├── routeType=1（转坐席）→ ESL originate 发第二段呼叫到坐席
-   │       └── routeType=2（外呼）→ 按优先级确定出局网关 ID:
-   │           ├── CallInfo.gatewayId 非空 → 用它作为出局网关 ID
-   │           ├── IVR 转接节点 routeValue 非空 → 用它作为出局网关 ID
-   │           └── 两者都为空 → 用当前连接的 FS（CHANNEL_PARK 事件来源 FS）兜底
-   │           → ESL originate 发第二段呼叫（携网关 ID）到第三方网关
-   └── 匹配失败 → 挂断呼叫并告警 "号码路由未匹配"
-③ SIP 代理通过 ESL originate 驱动 FS 发起第二段呼叫
-④ 第二段呼叫腿响应回传 → FS 两腿就绪
-⑤ SIP 代理通过 ESL bridgeCall 驱动 FS 桥接两腿
-⑥ FS 完成媒体锚定 → 通话建立
+### 20.4 协议转换能力
 
-注：以下三种场景豁免号码路由，直接通过 forwardToOutboundGateway 改写出局:
-- 三方会议邀请外部手机（c-leg 直接加入会议）
-- 双向出局转接（坐席显式指定两端号码+网关 ID）
-- 转接携带 X-Gateway-Id（折中方案，降低转接延迟）
-- 机器人自动外呼（ESL originate 直发，不走 sipproxy，不经过 forwardToOutboundGateway）
-```
+| 转换类型 | 说明                                                         |
+|----------|--------------------------------------------------------------|
+| 传输层   | WebSocket(JsSIP) ↔ UDP/TCP/TLS(FreeSWITCH/网关)              |
+| 媒体协议 | WebRTC(SRTP/DTLS) ↔ 传统 RTP/SDES-SRTP（由 FreeSWITCH 完成） |
+| 编解码   | Opus/VP8 ↔ G.711/G.729（由 FreeSWITCH 转码）                 |
+| SDP 协调 | 代理协调 SDP 媒体锚定，确保媒体流经过指定 FreeSWITCH         |
 
-### 14.4 协议转换能力
+### 20.5 媒体处理协调
 
-| 转换类型 | 说明                                                           |
-|----------|----------------------------------------------------------------|
-| 传输层   | WebSocket(JSSIP) ↔ UDP/TCP/TLS(FreeSWITCH/网关)                |
-| 媒体协议 | WebRTC(SRTP/DTLS) ↔ 传统 RTP/SDES-SRTP（由 FreeSWITCH 完成）   |
-| 编解码   | Opus/VP8 ↔ G.711/G.729（由 FreeSWITCH 转码）                   |
-| SDP 协调 | SIP 代理服务协调 SDP 媒体锚定，确保媒体流经过指定的 FreeSWITCH |
+- **所有媒体流必须经过 FreeSWITCH 中继**（系统设计原则）。
+- 通过负载均衡选择内部 FS 实例处理媒体；网关 ID 仅作 IVR 转接节点出局覆盖项。
+- 转接节点最终网关 ID 为空时使用当前连接的 FS（CHANNEL_PARK 来源）作为出局目标。
+- 协调录音、监听、转码等媒体能力的开启。
 
-### 14.5 媒体处理协调
+### 20.6 豁免场景识别（关键代码点）
 
-SIP 代理服务虽不直接处理 RTP，但负责协调媒体路径决策：
-
-- **所有媒体流必须经过 FreeSWITCH 中继**（系统设计原则）
-- 通过负载均衡选择内部 FreeSWITCH 实例处理媒体（不再通过网关 ID 指定，网关 ID 仅作为 IVR 转接节点的出局覆盖项）
-- 当 IVR 转接节点最终网关 ID 为空时，使用当前连接的 FS（CHANNEL\_PARK 事件来源 FS）作为出局目标
-- 通过 ESL originate/uuid\_bridge 确保 FreeSWITCH 作为媒体锚点参与两段呼叫腿
-- 协调录音、监听、转码等媒体能力的开启
-
-### 14.6 错误处理与可靠性
-
-```
-错误场景                    代理处理策略
-─────────────────────────────────────────────────────────────
-FreeSWITCH 无响应            Timer B 超时 → 尝试备选 FS 实例
-坐席未注册                   返回 404 → 可转语音信箱或手机
-媒体协商失败                 488 Not Acceptable Here → 降级编解码重试
-主叫挂断（早释）               487 Request Terminated → 通过 ESL uuidKill 通知 FS 清理资源
-网络中断                     Keepalive 检测 → 标记离线 → 释放呼叫
-ESL 连接断开                  重连机制 → 重新建立 ESL 连接 → 恢复呼叫控制
-```
-
-**补充异常场景**：
-
-| 异常场景                                     | 影响分析                                                                    | 处理策略                                                                                                                                 |
-|----------------------------------------------|-----------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| **SIP 代理服务自身故障**                     | 作为信令核心（SPOF），全局呼叫受影响，新呼叫无法建立，park 中呼叫腿超时释放 | 通过 HA 方案（主备/集群）保障。故障期间已 bridge 的通话可继续（FS 媒体层独立），但无法执行转接等控制操作                                 |
-| **FreeSWITCH 在 bridge 后故障**              | 通话中 FS 宕机，RTP 流中断，坐席听到静音或忙音，对话状态不一致              | 终端检测 RTP 超时（默认 30s）后主动挂断重拨；SIP 代理通过 ESL 心跳检测 FS 故障，将该 FS 摘除并尝试在其他 FS 重建媒体路径（需业务层支持） |
-| **re-INVITE 超时（Session Timer 刷新失败）** | 会话保活失败，一方认为通话已断，另一方仍保持媒体                            | 依赖 Session Timer 机制，超时方发送 BYE 释放；SIP 代理作为 B2BUA 需在两侧分别处理超时，协调释放整个呼叫                                  |
-| **ACK 丢失（200 OK 重传）**                  | 主叫未回 ACK，FS 重传 200 OK，可能导致重复应答或资源悬挂                    | 依赖 SIP T1/T2 重传定时器，FS 在 64×T1（默认 32s）后仍未收到 ACK 则触发 `ACK Timeout` 释放呼叫；SIP 代理应正确转发 ACK，不吞没           |
-| **CPS（每秒呼叫数）过载**                    | 高并发下 SIP 代理 CPU/内存过载，呼叫处理延迟增大甚至崩溃                    | 代理层实现 CPS 限流（令牌桶/漏桶），超过阈值时返回 `503 Service Unavailable` + `Retry-After`；坐席客户端指数退避重试                     |
-
-> **Timer B 可配置性**：文档中 Timer B 默认 32 秒（RFC 3261），实际部署中应对不同网关支持独立配置——部分运营商网关要求更短超时（如
-> 15 秒），国际长途可能需要更长（如 60 秒）。SIP 代理应支持按网关 ID 维度配置 Timer B。
-
-### 14.7 网关 ID 覆盖能力
-
-网关 ID 作为 IVR 转接节点的网关覆盖项。该能力由 `FlowTransferHandler` 和 `FlowCallOutRouteHandler` 实现。
-
-**覆盖优先级（高到低）**：
-
-| 优先级  | 网关 ID 来源                                              | 说明                                                                                                                                                                     |
-|---------|-----------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 1（高） | `CallInfo.gatewayId`                                      | 来自 INVITE 头 `X-Gateway-Id`（由 SIP 代理层 `WsInviteRequestHandler` / `SipInviteRequestHandler` 提取并存入 `SessionInfo` / `CallInfo`），业务侧显式指定，覆盖 IVR 配置 |
-| 2（中） | `FlowTransferNodeProperties.routeValue`（routeType=2 时） | 来自 IVR 流程配置，作为兜底网关 ID                                                                                                                                       |
-| 3（低） | 当前连接的 FS（CHANNEL\_PARK 事件来源 FS 的 `address`）   | 上述两者都为空时，使用当前正在处理该呼叫腿的 FS 实例，由其本地 sofia profile external 配置路由出局（不指定具体 gateway）                                                 |
-
-**处理逻辑（`FlowCallOutRouteHandler.handler`）**：
-
-```
-IVR 执行到转接节点（routeType=2 外呼）
-├── 读取 FlowDataContext / CallInfo 中的 gatewayId
-├── 网关 ID 确定优先级:
-│   ├── CallInfo.gatewayId 非空 → 使用它（忽略 properties.routeValue）
-│   ├── CallInfo.gatewayId 为空且 properties.routeValue 非空 → 使用 properties.routeValue
-│   └── 两者都为空 → 使用当前连接的 FS（FlowDataContext 中的 address）作为出局目标
-├── 通过网关 ID 查询 FsSipGatewayDO 配置（若使用具体网关 ID）
-├── 调用 fsClient.makeCall 发起出局呼叫:
-│   ├── 使用具体网关 ID → 通过该网关出局
-│   └── 网关 ID 为空 → 调用 fsClient.makeCall 时传入 null 网关参数，由 FS 本地 profile 处理出局
-└── 网关 ID 无效兜底（FsSipGatewayDO 不存在）:
-    ├── 回退到使用 IVR 转接节点配置的 routeValue
-    ├── 若 routeValue 也无效 → 使用当前连接的 FS 兜底
-    └── 记录告警日志提示 "网关 ID 无效"
-```
-
-**关键约束**：
-
-- 网关 ID 必须指向第三方出局网关（`FsSipGatewayDO`）， **不能设置为内部 FS 地址**，否则会导致 INVITE 回环死循环（详见 3.4
-  节告警说明）
-- 系统应在网关配置与 IVR 转接节点配置时进行校验，拒绝将内部 FS 地址配置为网关 ID
-- 网关 ID 覆盖逻辑仅在 IVR 转接节点 routeType=2（外呼）时生效；routeType=1（转坐席）时不涉及网关 ID
-
-### 14.8 SIP 代理层豁免场景识别（关键代码点）
-
-`SipInviteRequestHandler.handleIncomingRequest` 中识别"FS 源 + 携带 X-Gateway-Id"的组合，直接走
-`forwardToOutboundGateway`：
+`SipInviteRequestHandler.handleIncomingRequest` 识别"FS 源 + 携带 X-Gateway-Id"组合，直接走 `forwardToOutboundGateway`：
 
 ```java
-// SipInviteRequestHandler.java L82-99
-String callType;
-if (SipProxyConstants.FREESWITCH.equals(source) && StrUtil.isNotBlank(gatewayId)) {
-    // FS c-leg 携带 X-Gateway-Id → OUTBOUND（响应需回送 FS）
-    callType = SipProxyConstants.CALL_TYPE_OUTBOUND;
-} else if (SipProxyConstants.FREESWITCH.equals(source)) {
-    // FS 内部回环（如 转接 内部转接）→ INTERNAL
-    callType = SipProxyConstants.CALL_TYPE_INTERNAL;
-} else {
-    // THIRD_PARTY 或 WEBSOCKET → 兜底 INTERNAL
-    callType = SipProxyConstants.CALL_TYPE_INTERNAL;
-}
-
-// SipInviteRequestHandler.java L125-130（豁免分支）
+// SipInviteRequestHandler.java（豁免分支，L125-130 附近）
 if (SipProxyConstants.FREESWITCH.equals(source) && StrUtil.isNotBlank(gatewayId)) {
     log.info("[handleIncomingRequest][检测到FS c-leg携带X-Gateway-Id,直接出局]...");
     messageForwarder.forwardToOutboundGateway(request, gatewayId);
     return;
 }
-
-// 其他场景: forwardToFreeSwitch(request, freeSwitchNode);
-messageForwarder.forwardToFreeSwitch(request, freeSwitchNode);
+// 其他场景: messageForwarder.forwardToFreeSwitch(request, freeSwitchNode);
 ```
 
 ***
 
-## 十五、遗留问题与未来演进
+## 二十一、遗留问题与未来演进
 
-本方案当前实现已覆盖 7 个核心场景的"号码分析驱动路由 + 网关 ID 覆盖"设计。经全面排查，仍存在以下遗留问题（按优先级排序）：
+本方案场景体系与 test-all 对齐（12 个实现场景）。并发稳定性问题（P1-P5）已于 2026-08-29 修复并回归，详见第十五章节与
+`test-all/README.md`。当前仍存在的遗留项：
 
-### 15.1 高优先级遗留问题（影响核心功能或生产稳定性）
+### 21.1 中优先级（影响可维护性或非核心场景）
 
-<br />
+| #      | 问题                | 影响模块 | 修复方向                                   | 状态     |
+|--------|---------------------|----------|--------------------------------------------|----------|
+| M-指标 | Micrometer 业务指标 | 全局     | CPS 限流指标、ESL 重连次数、断线丢失事件数 | 暂不处理 |
+| M-TURN | TURN 证书（5349）   | coturn   | TLS 证书配置后启用 TURN over TLS           | 待部署   |
 
-### 15.2 中优先级遗留问题（影响可维护性或非核心场景）
+### 21.2 低优先级（增强型 / 未来演进）
 
-| #      | 问题                    | 影响模块                   | 修复方向                                                                                                                | 状态     |
-|--------|-------------------------|----------------------------|-------------------------------------------------------------------------------------------------------------------------|----------|
-| M1     | 第三方节点选择简化      | `SipNodeManager`           | 改为按 INVITE 来源 IP 反查网关节点（`selectThirdPartyNode(callId, sourceIp)`）                                          | 已修复   |
-| M3     | PRACK / UPDATE 专门处理 | `SipDefaultRequestHandler` | 改为按 Call-ID 查 SessionInfo + 复用 `ResponseForwardingStrategy` 决策转发目标，SIP 头原样透传（Require/RSeq 自动保留） | 已修复   |
-| M-指标 | Micrometer 业务指标     | 全局                       | CPS 限流指标、ESL 重连次数、重连期间丢失事件数等                                                                        | 暂不处理 |
-
-### 15.3 低优先级遗留问题（增强型 / 未来演进）
-
-| #  | 问题                           | 修复方向                                                                                                        |
-|----|--------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| F1 | 录音转写 + 质检                | 集成 ASR 转写服务（如阿里云语音转写），自动生成通话摘要、关键词命中、坐席质检评分                               |
-| F2 | 全链路号码路由可视化           | 管理后台展示号码路由表命中链路、IVR 流程执行路径、异常统计                                                      |
-| F3 | WebRTC 视频呼叫支持            | 集成 `mod_av` 视频编解码、坐席视频接入                                                                          |
-| F4 | SIP over TCP/TLS 支持          | 第三方网关走 TCP/TLS 时启用，配置证书                                                                           |
-| F5 | 多 FreeSWITCH 实例负载均衡优化 | 引入一致性哈希（按 Call-ID）减少单腿切换                                                                        |
-| F6 | FS 故障切换已 bridge 通话恢复  | 方案 4.2 节要求业务层支持 ESL originate 重建呼叫腿、媒体路径切换，复杂度极高，当前阶段 FS 自身 RTP 超时检测兜底 |
-| F7 | Session Timer B2BUA 两侧维护   | 方案 17.1 节要求 B2BUA 两侧分别维护 re-INVITE 刷新调度，复杂度极高，当前阶段 FS `session-timeout-sec` 配置兜底  |
+| #  | 问题                         | 修复方向                                                                |
+|----|------------------------------|-------------------------------------------------------------------------|
+| F1 | 录音转写 + 质检              | 集成 ASR 转写服务，自动生成通话摘要、关键词命中、坐席质检评分           |
+| F2 | 全链路号码路由可视化         | 管理后台展示号码路由命中链路、IVR 执行路径、异常统计                    |
+| F3 | WebRTC 视频呼叫              | 集成 mod_av 视频编解码                                                  |
+| F4 | SIP over TCP/TLS 出局        | 第三方网关走 TCP/TLS 时启用，配置证书                                   |
+| F5 | 多 FS 负载均衡优化           | 一致性哈希（按 Call-ID）减少单腿切换                                    |
+| F6 | FS 故障后已 bridge 通话恢复  | 业务层 ESL 重建呼叫腿/媒体路径切换（复杂度高，当前 RTP 超时兜底）       |
+| F7 | Session Timer B2BUA 两侧维护 | B2BUA 两侧分别维护 re-INVITE 刷新（当前 FS `session-timeout-sec` 兜底） |
+| F8 | 三方会议/双向出局 e2e 覆盖   | 将豁免场景纳入 test-all（当前仅代码实现、无自动化）                     |
 
 ***
 
-## 十六、端到端信令路径汇总表
+## 二十二、端到端信令路径汇总表
 
-| 场景                                              | 号码路由处理                                         | 信令路径                                                                                                          | 媒体路径                 |
-|---------------------------------------------------|------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|--------------------------|
-| **场景一**：坐席A → 坐席B（内部坐席间呼叫）       | 走号码路由                                           | A→代理→FS(park)→ESL 号码路由匹配→IVR→转接节点(routeType=1)→ESL originate→FS→代理→B                                | A↔FS↔B（经 FS 中继）     |
-| **场景一**：坐席A → 非坐席号码（IVR 子流程）      | 走号码路由                                           | A→代理→FS(park)→ESL 号码路由匹配→IVR→转接节点→ESL originate→FS→代理→目标                                          | A↔FS↔目标（经 FS 中继）  |
-| **场景二**：坐席A → 手机（携带 X-Gateway-Id=gw3） | 走号码路由（IVR 转接节点用 CallInfo.gatewayId 覆盖） | A→代理→FS(park)→ESL 号码路由匹配→IVR→转接节点(routeType=2,用 gw3 覆盖)→ESL originate→FS→代理→第三方网关→PSTN→手机 | A↔FS(转码)↔网关↔手机     |
-| **场景二**：坐席A → 手机（未携带 X-Gateway-Id）   | 走号码路由（IVR 转接节点用 routeValue 兜底）         | A→代理→FS(park)→ESL 号码路由匹配→IVR→转接节点(routeType=2)→ESL originate→FS→代理→第三方网关→PSTN→手机             | A↔FS(转码)↔网关↔手机     |
-| **场景三**：手机 → 坐席A（入局）                  | 走号码路由（type=1 呼入）                            | 手机→PSTN→第三方网关→代理→FS(park)→ESL 号码路由匹配(呼入)→IVR→ESL originate→FS→代理→A                             | 手机↔网关↔FS(转码)↔A     |
-| **场景四**：三方会议（A+B+外部手机）              | **豁免号码路由**                                     | A、B→代理→FS(conf) + ESL originate(携 gw3)→FS→代理→第三方网关→手机                                                | 三方→FS 会议桥混合       |
-| **场景五**：手机A → 手机B（双向出局转接）         | **豁免号码路由**                                     | ESL originate(携 gw1)→FS→代理→网关→手机A + ESL originate(携 gw3)→FS→代理→网关→手机B + uuid\_bridge                | 手机A↔网关↔FS↔网关↔手机B |
-| **场景六**：坐席间转接到外部手机（转接 携 gw3）   | **豁免号码路由**（折中方案）                         | A-B 通话中→转接(gw3)→ESL originate(携 gw3)→FS→代理→网关→手机 + uuid\_bridge(B↔手机)                               | B↔FS(转码)↔网关↔手机     |
-| **场景六**：坐席间转接到外部手机（转接 未携 gw3） | 走号码路由                                           | A-B 通话中→转接→ESL 号码路由匹配→IVR→转接节点(routeType=2)→ESL originate→FS→代理→网关→手机 + uuid\_bridge(B↔手机) | B↔FS(转码)↔网关↔手机     |
-| **场景七**：机器人自动外呼（指定 ivr\_flow）      | **跳过号码路由**（ivr\_flow 显式指定优先）           | 外呼任务(内部方法)→ESL originate→FS(sofia/external)→网关→手机(接通)→ESL IVR(可转人工坐席)                         | 手机↔网关↔FS(IVR 媒体)   |
-| **场景七**：机器人自动外呼（未指定 ivr\_flow）    | 走号码路由（兜底）                                   | 外呼任务(内部方法)→ESL originate→FS(sofia/external)→网关→手机(接通)→ESL 号码路由匹配→IVR(可转人工坐席)            | 手机↔网关↔FS(IVR 媒体)   |
+| 场景                                 | 号码路由处理                                              | 信令路径                                                                         | 媒体路径           |
+|--------------------------------------|-----------------------------------------------------------|----------------------------------------------------------------------------------|--------------------|
+| **1** 内部呼叫（9#1002）             | 走号码路由（route102/flow102）                            | A→代理→FS(park)→route102→flow102 转坐席→originate→FS→代理→B                      | A↔FS↔B             |
+| **2** 出局呼叫（0#18600000000）      | 走号码路由（route105/flow105，routeValue=网关2）          | A→代理→FS(park)→flow105→originate(携 X-Gateway-Id=2)→FS→代理(豁免直发)→网关→手机 | A↔FS↔网关↔手机     |
+| **3** 入局 IVR（4001234）            | 走号码路由（route101/flow101，呼入方向）                  | 手机→网关→代理→FS(park)→flow101(放音/收号/分支/转坐席组)→originate→坐席          | 手机↔网关↔FS↔坐席  |
+| **5** 保持/恢复                      | 基线通话（flow102）                                       | 通话中 → UI 保持 → ESL uuid_hold(保持音) → 恢复                                  | 媒体保持/恢复      |
+| **6** 咨询转接（→1003）              | 基线+二段腿（flow102 通话）                               | A-B 通话 → REFER → hold(B) → originate C → A-C 咨询 → A 挂断确认 → bridge(B,C)   | B↔FS↔C             |
+| **7** 自动外呼（18600000001）        | ESL 直发 + ivr_flow 显式/号码路由兜底（route103/flow103） | 任务→ESL originate(sofia/external)→网关→手机→IVR                                 | 手机↔网关↔FS(IVR)  |
+| **8** 客服组繁忙（00300xxx）         | 走号码路由（route104/flow104）                            | A→代理→FS(park)→flow104 放忙音→end                                               | A↔FS               |
+| **9** 满意度评价（00100xxx）         | 走号码路由（route106/flow106）                            | A→FS(park)→flow106 收号→method→感谢→end                                          | A↔FS               |
+| **10** AI 对话（00600）              | 走号码路由（route107/flow107）                            | A→FS(park)→flow107 start(ASR/TTS)→ai 多轮→中断词→condition→转坐席 1002           | A↔FS(AI 音频)↔坐席 |
+| **11** 并发呼入（4001234 ×N）        | 同场景 3                                                  | pjsua×N→网关→代理→FS→flow101→坐席组分配/排队                                     | N×FS↔坐席          |
+| **12** 注册网关呼入（4005678）       | 走号码路由（route108/flow108）                            | 4G 网关(REGISTER 绑定)→代理→FS(park)→flow108 转坐席组                            | 网关↔FS↔坐席       |
+| **13** 注册网关呼出（8#18600000000） | 走号码路由（route109/flow109，网关46 注册绑定解析）       | A→FS(park)→flow109→originate(46)→代理(注册 Contact)→网关→手机                    | A↔FS↔网关↔手机     |
 
 ***
 
-## 十七、生产环境必需的 SIP 补充机制
+## 二十三、生产环境必需的 SIP 补充机制
 
-上述场景描述了核心呼叫流程。在生产环境中，以下 SIP 标准机制对于保障通话可靠性至关重要，需在 SIP 代理服务和 FreeSWITCH
-中配置启用：
+上述场景描述了核心呼叫流程。在生产环境中，以下 SIP 标准机制对保障通话可靠性至关重要，需在 SIP 代理服务和 FreeSWITCH 中配置启用：
 
-### 17.1 Session Timer（会话定时器，RFC 4028）
+### 23.1 Session Timer（会话定时器，RFC 4028）
 
 **目的**：防止"僵尸通话"——通话一方网络异常断开后，另一方的会话永远挂起不释放。
 
@@ -1609,23 +1303,17 @@ INVITE sip:B@domain SIP/2.0
   Session-Expires: 1200;refresher=uac     ← 被叫接受参数
 ```
 
-**配置要点**：
-
 | 组件           | 配置                                                                                         |
 |----------------|----------------------------------------------------------------------------------------------|
 | **FreeSWITCH** | sofia profile 启用 `enable-timer`，设置 `session-timeout-sec`（如 1200 秒）                  |
 | **SIP 代理**   | 作为 B2BUA，需在两段对话中分别维护 Session Timer，分别向坐席和 FS/网关方向发送刷新 re-INVITE |
 | **最小 SE**    | 建议不低于 90 秒，避免频繁刷新影响性能                                                       |
 
-> **B2BUA 下的 Session Timer**：由于 SIP 代理是 B2BUA，两段对话的 Session Timer 独立维护。代理需分别向坐席侧和 FS 侧发送
-> re-INVITE 刷新，任一侧超时则通过 ESL 释放整个呼叫。
+> **B2BUA 下的 Session Timer**：两段对话的 Session Timer 独立维护，任一侧超时则通过 ESL 释放整个呼叫。
 
-### 17.2 PRACK / 100rel（可靠临时响应，RFC 3262）
+### 23.2 PRACK / 100rel（可靠临时响应，RFC 3262）
 
-**目的**：确保携带 SDP 的 183 临时响应可靠传输。在标准 SIP 中，1xx 临时响应不触发重传，若 183 携带了 SDP answer
-但丢失，会导致媒体路径建立失败。
-
-**机制**：183 响应中携带 `Require: 100rel`，要求主叫方回送 PRACK 确认。PRACK 本身也可携带 SDP，实现早期媒体阶段的可靠协商。
+**目的**：确保携带 SDP 的 183 临时响应可靠传输——1xx 不触发重传，若 183 携带 SDP answer 但丢失会导致媒体路径建立失败。
 
 ```
 PRACK/100rel 协商示例:
@@ -1640,124 +1328,83 @@ PRACK sip:B@domain SIP/2.0
   RAck: 1 183 INVITE                        ← 确认 183
 ```
 
-**配置要点**：
+| 组件           | 配置                                                             |
+|----------------|------------------------------------------------------------------|
+| **FreeSWITCH** | sofia profile 启用 `enable-100rel`                               |
+| **SIP 代理**   | 透传 `Require: 100rel` / `RSeq` / `RAck` 头域；不吞没 PRACK 请求 |
+| **JsSIP**      | 默认支持 100rel（`extraHeaders: ['Supported: 100rel']`）         |
 
-| 组件           | 配置                                                                                      |
-|----------------|-------------------------------------------------------------------------------------------|
-| **FreeSWITCH** | sofia profile 启用 `enable-100rel`，设置 `inbound-no-media` 等参数                        |
-| **SIP 代理**   | 透传 `Require: 100rel` / `RSeq` / `RAck` 头域；不吞没 PRACK 请求                          |
-| **JSSIP**      | 默认支持 100rel（`sessionDescriptionHandler` 配置 `extraHeaders: ['Supported: 100rel']`） |
+### 23.3 GRUU（Globally Routable User Agent URI，RFC 5627）
 
-> **遗留优化点**：当前 `WsDefaultRequestHandler` 不区分方法类型，对所有未注册的 SIP 方法做相同处理（仅转发到 FS），可能吞没
-> PRACK 的 `RSeq` / `RAck` 头域。详见十五、M3。
+**目的**：多设备注册场景下精确路由到特定设备实例（Web 端 + 移动端同时登录时区分）。
 
-### 17.3 GRUU（Globally Routable User Agent URI，RFC 5627）
+**机制**：REGISTER 携带 `+sip.instance`，注册服务器返回 GRUU（`sip:A@domain;gr=urn:uuid:xxx`），后续 INVITE 可用 GRUU 精确路由。
 
-**目的**：在多设备注册场景下，精确路由到特定设备实例。当一个坐席账号同时登录 Web 端和移动端时，普通 AOR（如 `sip:A@domain`
-）无法区分应路由到哪个设备。
+| 组件         | 配置                                                                         |
+|--------------|------------------------------------------------------------------------------|
+| **SIP 代理** | 注册服务器支持 GRUU 生成与存储，维护 AOR→GRUU 映射                           |
+| **JsSIP**    | REGISTER 携带 `+sip.instance`                                                |
+| **路由逻辑** | Request-URI 含 `gr` 参数精确路由；否则按 AOR 多设备策略（最后注册/并行振铃） |
 
-**机制**：REGISTER 时携带 `+sip.instance` 参数（设备唯一标识），注册服务器返回 GRUU（如 `sip:A@domain;gr=urn:uuid:xxx`），后续
-INVITE 可使用 GRUU 精确路由。
+> **遗留优化点**：当前注册成功后仅缓存 registerInfo，未实现 GRUU。
 
-```
-REGISTER 流程（携带实例 ID）:
-REGISTER sip:domain SIP/2.0
-  Contact: <sip:A@10.0.0.5:5060>;+sip.instance="<urn:uuid:00000000-0000-1000-8000-000A95A0E128>"
-  Supported: gruu
+### 23.4 ICE 协商（Interactive Connectivity Establishment）
 
-200 OK:
-  Contact: <sip:A@10.0.0.5:5060>;+sip.instance="<urn:uuid:...>";pub-gruu="sip:A@domain;gr=urn:uuid:..."
-```
+**目的**：JSSIP 使用 WebRTC，客户端可能位于 NAT/防火墙后，通过 ICE 候选（host/srflx/relay）确保媒体可达；TURN 中继兜底对称
+NAT。
 
-**配置要点**：
+| 组件           | 配置                                                                                                                                                               |
+|----------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **FreeSWITCH** | sofia profile 启用 `rtp-ip`、`ext-rtp-ip`；生产保持 `disable_ice=true` + `apply-candidate-acl=localnet.auto`（历史 488 根因，见《呼叫中心网络架构与部署拓扑》6.1） |
+| **JsSIP**      | 配置 STUN/TURN 服务器（coturn 3478/49152-49200）                                                                                                                   |
+| **SIP 代理**   | 不参与 ICE 协商，确保 SDP 透传完整                                                                                                                                 |
 
-| 组件         | 配置                                                                                                              |
-|--------------|-------------------------------------------------------------------------------------------------------------------|
-| **SIP 代理** | 注册服务器需支持 GRUU 生成与存储，在注册表中维护 AOR→GRUU 映射                                                    |
-| **JSSIP**    | REGISTER 时携带 `+sip.instance`，启用 GRUU 支持                                                                   |
-| **路由逻辑** | 呼叫时若 INVITE 的 Request-URI 包含 `gr` 参数，精确路由到对应设备实例；否则按 AOR 多设备策略（最后注册/并行振铃） |
+### 23.5 各机制在生产环境中的重要性
 
-> **遗留优化点**：当前 `WsRegisterRequestHandler` 注册成功后仅调用 `sessionManager.cacheRegisterInfo` 缓存 registerInfo 到
-> SessionManager，无 `saveLocationInfo` 方法，未实现 GRUU。详见十五、L2。
-
-### 17.4 ICE 协商（Interactive Connectivity Establishment）
-
-**目的**：JSSIP 使用 WebRTC，客户端可能位于 NAT/防火墙后，需通过 ICE 收集候选地址（主机候选、STUN 候选、TURN 中继候选），确保媒体可达。
-
-**机制**：SDP 中携带多个 ICE 候选地址，双方通过 STUN 绑定检测连通性，选择最优路径。FreeSWITCH 作为媒体锚点需正确处理 ICE
-候选替换。
-
-```
-ICE 候选地址类型:
-├── host 候选：本机 IP 地址（仅同一局域网可达）
-├── srflx 候选：STUN 反射地址（NAT 公网映射地址）
-└── relay 候选：TURN 中继地址（通过 TURN 服务器中继，兜底方案）
-```
-
-**配置要点**：
-
-| 组件           | 配置                                                                                      |
-|----------------|-------------------------------------------------------------------------------------------|
-| **FreeSWITCH** | sofia profile 启用 `rtp-ip`、`ext-rtp-ip`（NAT 环境公网地址），支持 ICE（`ice-`相关参数） |
-| **JSSIP**      | 配置 STUN/TURN 服务器，收集 ICE 候选                                                      |
-| **SIP 代理**   | 不参与 ICE 协商，但需确保 SDP 透传完整（ICE 候选在 SDP 的 `a=candidate` 行中）            |
-
-> **WebRTC 与 FS 的 ICE 交互**：当 FS 收到 WebRTC 客户端的 INVITE（SDP 含 ICE 候选），FS 作为 ICE Lite
-> 端（仅响应连接检查，不主动发起），选择可达的候选地址建立 DTLS-SRTP 媒体路径。
-
-### 17.5 各机制在生产环境中的重要性
-
-| 机制              | 重要性                | 不启用的风险                                      |
-|-------------------|-----------------------|---------------------------------------------------|
-| **Session Timer** | **高**                | 网络中断后产生僵尸通话，媒体资源泄漏，FS 端口耗尽 |
-| **PRACK/100rel**  | **中**                | 183 携带 SDP 丢失时早期媒体不可靠，可能导致单通   |
-| **GRUU**          | **中**                | 多设备登录时路由不精确，呼叫可能振到错误设备      |
-| **ICE**           | **高**（WebRTC 必需） | NAT 环境下 WebRTC 媒体不可达，通话无声            |
+| 机制              | 重要性                | 不启用的风险                           |
+|-------------------|-----------------------|----------------------------------------|
+| **Session Timer** | **高**                | 网络中断后僵尸通话、媒体资源泄漏       |
+| **PRACK/100rel**  | **中**                | 183 SDP 丢失时早期媒体不可靠、单通     |
+| **GRUU**          | **中**                | 多设备登录路由不精确                   |
+| **ICE**           | **高**（WebRTC 必需） | NAT 环境下 WebRTC 媒体不可达、通话无声 |
 
 ***
 
 ## 附录 A：号码路由表配置规范
 
-所有呼叫（含内部坐席间呼叫）必须经过号码路由表的正则匹配 → IVR 流程。号码路由表（`CallRouteDO`
-）成为路由决策核心，其配置完整性直接决定系统是否能正常处理呼叫。
+所有呼叫（含内部坐席间呼叫）必须经过号码路由表的正则匹配 → IVR 流程。号码路由表（`CallRouteDO`）成为路由决策核心，其配置完整性直接决定
+系统是否能正常处理呼叫。 **本文档的路由/流程真值 = `test-all/common/data_spec.py` 的 FLOW_SPECS**（route/flow
+101-109），数据变更只改该文件一处。
 
 ### A.1 配置强制性要求
 
-| 要求项                     | 说明                                                                                                              |
-|----------------------------|-------------------------------------------------------------------------------------------------------------------|
-| **必须配置至少一条规则**   | 号码路由表为空时，所有呼叫（包括内部坐席间呼叫）都会因匹配失败被挂断                                              |
-| **必须配置默认兜底规则**   | 推荐配置 `.*` 匹配所有号码指向默认 IVR 流程，避免未匹配到规则的呼叫被挂断                                         |
-| **必须配置坐席分机号规则** | 内部坐席间呼叫要求号码路由表配置坐席分机号正则规则，指向包含转坐席节点（routeType=1）的 IVR 流程                  |
-| **必须配置 DID 号码规则**  | 入局呼叫要求号码路由表配置 DID 号码正则规则（type=1 呼入），指向对应业务 IVR 流程                                 |
-| **必须配置外部手机号规则** | 出局到外部手机要求号码路由表配置外部手机号正则规则（type=2 呼出），指向包含外呼转接节点（routeType=2）的 IVR 流程 |
-| **条目数建议 < 1000 条**   | 当前实现先按 status + type 过滤候选列表，再对候选列表做正则匹配，条目数过多时正则匹配性能下降                     |
+| 要求项                        | 说明                                                                            |
+|-------------------------------|---------------------------------------------------------------------------------|
+| **必须配置至少一条规则**      | 路由表为空时所有呼叫（含内部坐席间）都会因匹配失败被挂断                        |
+| **必须配置坐席分机号规则**    | 内部坐席间呼叫需分机号正则，指向含转坐席节点（routeType=1）的 IVR               |
+| **必须配置 DID/呼入号码规则** | 入局呼叫需 type=1 呼入规则（如 4001234/4005678），指向对应 IVR                  |
+| **必须配置呼出前缀规则**      | 出局到外部号码需 type=2 呼出规则（如 9#/0#/8# 前缀），指向含外呼/转接节点的 IVR |
+| **条目数建议 < 1000 条**      | 当前实现先按 status + type 过滤再做正则匹配，条目过多时性能下降                 |
 
-### A.2 推荐配置示例
+### A.2 库中真值（route 101-109，与 data_spec.py 一致）
 
-| 号码类型                | 正则规则        | type | level | flowId         | IVR 流程说明                                                                                     |
-|-------------------------|-----------------|------|-------|----------------|--------------------------------------------------------------------------------------------------|
-| 默认兜底                | `.*`            | 2    | 1     | flow\_default  | 默认 IVR 流程（包含一个外呼转接节点，routeValue 留空依赖 CallInfo.gatewayId 覆盖或当前 FS 兜底） |
-| 坐席分机号（1000-1999） | `^1\d{3}$`      | 2    | 10    | flow\_agent    | 坐席间呼叫 IVR 流程（包含转坐席节点 routeType=1，routeValue 为目标坐席 ID）                      |
-| 外部手机号              | `^1[3-9]\d{9}$` | 2    | 10    | flow\_outbound | 外呼 IVR 流程（包含外呼转接节点 routeType=2，routeValue 可留空）                                 |
-| 入局 DID 号码           | `^010\d{8}$`    | 1    | 10    | flow\_inbound  | 入局 IVR 流程（播放欢迎语、收 DTMF、转人工坐席）                                                 |
+| route_id | 名称            | 正则（route_num） | direction | 删除前缀 | flow_id | 用途/场景                                               |
+|----------|-----------------|-------------------|-----------|----------|---------|---------------------------------------------------------|
+| 101      | 呼入-4001234    | `^(4001234).*`    | 1 呼入    | -        | 101     | 场景 3/11：入局 IVR 全链路（放音/收号/分支/转坐席组 1） |
+| 102      | 呼出-内部电话   | `^(9#).*`         | 2 呼出    | `9#`     | 102     | 场景 1/5/6：内部呼叫/保持基线/咨询转接基线              |
+| 103      | 呼出-自动外呼   | `^(00200).*`      | 2 呼出    | -        | 103     | 场景 7：自动外呼（兜底路径）                            |
+| 104      | 呼出-客服组繁忙 | `^(00300).*`      | 2 呼出    | -        | 104     | 场景 8：忙音提示                                        |
+| 105      | 呼出-外部电话   | `^(0#).*`         | 2 呼出    | `0#`     | 105     | 场景 2：出局呼叫（routeValue=网关 2）                   |
+| 106      | 呼出-满意度评价 | `^(00100).*`      | 2 呼出    | -        | 106     | 场景 9：收号 + 方法节点                                 |
+| 107      | 呼出-AI对话     | `^(00600).*`      | 2 呼出    | -        | 107     | 场景 10：AI 对话（中断词转人工 1002）                   |
+| 108      | 注册网关呼入    | `^4005678$`       | 1 呼入    | -        | 108     | 场景 12：4G 网关注册呼入转坐席组 1                      |
+| 109      | 注册网关呼出    | `^(8#).*`         | 2 呼出    | `8#`     | 109     | 场景 13：4G 网关注册呼出（routeValue=网关 46）          |
 
 ### A.3 兜底规则建议
 
-**默认兜底规则** **`.*`** **配置示例**：
-
-- **正则**：`.*`（匹配所有号码）
-- **type**：建议同时配置 type=1（呼入）和 type=2（呼出）两条兜底规则
-- **level**：设置为最低（如 1），确保只有当其他更具体的规则都不匹配时才使用兜底规则
-- **flowId**：指向默认 IVR 流程，该 IVR 流程应包含一个外呼转接节点（routeType=2，routeValue 留空），依赖 `CallInfo.gatewayId`
-  覆盖或当前 FS 兜底
-
-**坐席分机号配置示例** **`^1\d{3}$`**：
-
-- **正则**：`^1\d{3}$`（匹配 1000-1999 分机号段）
-- **type**：2（呼出）
-- **level**：设置为较高（如 10），确保优先于兜底规则匹配
-- **flowId**：指向包含转坐席节点（routeType=1）的 IVR 流程
-- **IVR 转接节点配置**：routeType=1，routeValue=目标坐席 ID（由 IVR 流程动态确定，或使用变量占位符）
+- **默认兜底规则 `.*`**：建议同时配置 type=1（呼入）与 type=2（呼出）两条，level 设为最低（如 1），flowId 指向默认 IVR。
+- **坐席分机号规则**：本系统坐席经软电话拨号走 `9#` 前缀路由（route102）；如配置直拨分机号规则（如 `^1\d{3}$`），同样指向含
+  routeType=1 转坐席节点的 IVR。
 
 ### A.4 号码路由匹配流程
 
@@ -1771,44 +1418,45 @@ ESL 处理器收到 CHANNEL_PARK 事件
 │   └── 返回匹配的 CallRouteDO（含 flowId）
 ├── 匹配成功 → 用 flowId 驱动 IVR 流程
 └── 匹配失败（无任何正则匹配）:
-    ├── 挂断呼叫
-    ├── 播放失败提示音（或返回 503 Service Unavailable）
+    ├── 挂断呼叫 + 播放失败提示音（或返回 503）
     ├── 生成失败话单
     └── 记录告警日志提示运维人员补充号码路由规则
 ```
 
 ### A.5 多租户隔离策略
 
-号码路由已实现租户隔离。`FsCallIRouteProcess` 从 `CallInfo.tenantId` 读取租户 ID，通过
-`FsCallCacheServiceImpl.getCallRoute(routeNum, type, tenantId)` 查询路由规则：
+号码路由已实现租户隔离：`FsCallIRouteProcess` 从 `CallInfo.tenantId` 读取租户 ID，通过租户上下文查询路由规则。
 
-- **tenantId 非空**（呼出场景）：通过 `TenantUtils.execute(tenantId, ...)` 设置租户上下文，调用
-  `callRouteService.getListByRouteNumberAndType`（受 MyBatis-Plus 租户插件自动隔离），确保 A 租户的呼叫不会匹配到 B 租户的路由规则
-- **tenantId 为空**（呼入场景，路由反查前）：回退到 `getCallRouteNoTenant`（无租户隔离查询），并打印 `log.warn` 告警，保证呼入主流程不受影响
+- **tenantId 非空**（呼出场景）：`TenantUtils.execute(tenantId, ...)` 设置租户上下文查询（MyBatis-Plus 租户插件自动隔离），保证
+  A 租户呼叫不匹配 B 租户路由；
+- **tenantId 为空**（呼入场景）：回退 `getCallRouteNoTenant`（无租户隔离查询）并打印告警，保证呼入主流程不受影响；
+- **异步/调度线程**：无租户上下文时须包 `TenantUtils.executeIgnore`（并发分发等场景，见场景 11 P1 修复经验）。
 
 ### A.6 号码路由匹配失败的处理策略
 
-| 失败场景                                   | 处理策略                                                                         |
-|--------------------------------------------|----------------------------------------------------------------------------------|
-| 号码路由表为空（无任何规则）               | 挂断呼叫，播放"系统配置错误"提示音，记录告警"号码路由表未配置任何规则"           |
-| 号码路由表有规则但无任何正则匹配到被叫号码 | 挂断呼叫，播放失败提示音，记录告警"号码 \[被叫号] 未匹配到路由规则"              |
-| 匹配到路由但 flowId 为空（IVR 流程未配置） | 挂断呼叫，播放"系统配置错误"提示音，记录告警"号码路由 \[routeId] 的 flowId 为空" |
-| 匹配到路由但 IVR 流程不存在（flowId 无效） | 挂断呼叫，播放"系统配置错误"提示音，记录告警"IVR 流程 \[flowId] 不存在"          |
+| 失败场景                         | 处理策略                                                           |
+|----------------------------------|--------------------------------------------------------------------|
+| 号码路由表为空（无任何规则）     | 挂断呼叫，播放"系统配置错误"提示音，记录告警                       |
+| 有规则但无任何正则匹配到被叫号码 | 挂断呼叫，播放失败提示音，记录告警"号码 [被叫号] 未匹配到路由规则" |
+| 匹配到路由但 flowId 为空         | 挂断呼叫，播放"系统配置错误"提示音，记录告警                       |
+| 匹配到路由但 IVR 流程不存在      | 挂断呼叫，播放"系统配置错误"提示音，记录告警                       |
 
 ### A.7 配置清单
 
 系统部署时，运维侧需确认以下号码路由表已配置：
 
-- [ ] 坐席分机号段（如 `^1\d{3}$`）→ 坐席间呼叫 IVR（含 routeType=1 转坐席节点）
-- [ ] 外部手机号段（如 `^1[3-9]\d{9}$`）→ 外呼 IVR（含 routeType=2 外呼转接节点）
-- [ ] 全部 DID 号码（如 `^010\d{8}$`、`^021\d{8}$`）→ 入局 IVR
-- [ ] 默认兜底规则 `.*`（type=1 呼入）→ 入局默认 IVR
-- [ ] 默认兜底规则 `.*`（type=2 呼出）→ 出局默认 IVR
-- [ ] 400/800 客服热线（按运营商约定）
-- [ ] 国际长途（按需）
-- [ ] 紧急号码 110/120/119（按需）
+- [ ] 内部呼叫前缀 `9#`（route102）→ flow102（转坐席）
+- [ ] 外呼前缀 `0#`（route105）→ flow105（外呼，网关 2）
+- [ ] 注册网关呼出前缀 `8#`（route109）→ flow109（外呼，网关 46 注册模式）
+- [ ] 入局 DID `4001234`（route101）→ flow101（入局 IVR）
+- [ ] 入局 4G 网关号 `4005678`（route108）→ flow108（转坐席组）
+- [ ] 专用流程号段：`00200`(103)/`00300`(104)/`00100`(106)/`00600`(107)
+- [ ] 默认兜底规则 `.*`（type=1 呼入 / type=2 呼出各一条）
+- [ ] 坐席直拨分机号规则（按需，如 `^1\d{3}$`）
+- [ ] 400/800 客服热线、紧急号码（按运营商约定）
 
 ***
 
-**文档完成时间**：2026-07-22 **对应代码版本**：yudao-cloud-cc main 分支（v3.0） **维护人**：cc 模块开发组 **反馈渠道**：项目
-AGENTS.md / 团队 Wiki
+**文档完成时间**：2026-09-02　 **对应代码版本**：yudao-cloud-cc main 分支（v4.0，场景体系与 test-all 对齐）　 **维护人**：cc
+模块开发组 **反馈渠道**：项目 AGENTS.md / 团队 Wiki　 **事实源提醒**：路由/流程/节点/断言真值变更时同步更新
+`test-all/common/data_spec.py` 与本附录 A.2。

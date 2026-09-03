@@ -5,13 +5,13 @@ FS 通道与注册状态监控脚本
 需求背景: 场景1/5/6 坐席B未收到来电,需精确定位失败点
 预期结果: 每2秒打印 FS 通道数 + internal profile 注册数,对照测试日志定位失败环节
 """
+import datetime
 import os
 import sys
 import time
-import datetime
 
 # 公共组件目录(common/) 路径装配: esl_helper.py / config.py 均位于 ../common
-# (原为绝对路径硬编码 /Users/wenjiaqi/Documents/yudao-cloud-cc/...，已改为相对路径)
+# (原为绝对路径硬编码 <本地用户目录>/Documents/yudao-cloud-cc/...，已改为相对路径)
 _COMMON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "common")
 if _COMMON_DIR not in sys.path:
     sys.path.insert(0, _COMMON_DIR)

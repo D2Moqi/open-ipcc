@@ -5,29 +5,29 @@
 # -----------------------------------------------------------------------------
 # 功能：
 #   1. 本地执行前端生产构建（pnpm build:prod -> 产物 dist-prod/）
-#   2. 通过 SCP 上传至服务器 39.107.224.184（root）的 /opt/cc/web 目录（网站根目录）
-#   3. 通过 curl 访问 https://www.cc.wenmoqi.top/ 验证部署（HTTP 200 + 关键字）
+#   2. 通过 SCP 上传至服务器 <B服务器公网>（root）的 /opt/cc/web 目录（网站根目录）
+#   3. 通过 curl 访问 https://<B服务器域名>/ 验证部署（HTTP 200 + 关键字）
 #   4. 完整错误处理 + 验证超时重试机制（单轮内最多 6 次）
 # 依赖：pnpm、sshpass、scp、ssh、curl（均通过 subprocess 调用系统命令）
 # 说明：脚本单次执行完整部署；稳定性由调用方多次运行本脚本验证。
 # =============================================================================
 import os
+import subprocess
 import sys
 import time
-import subprocess
 
 # ----------------------------- 配置区（按实际修改） -----------------------------
-FRONTEND_DIR = "/Users/wenjiaqi/Documents/ipcc/yudao-ui-admin-vue3"
+FRONTEND_DIR = "<本地项目根路径>/yudao-ui-admin-vue3"
 DIST_DIR = os.path.join(FRONTEND_DIR, "dist-prod")  # build:prod 模式 VITE_OUT_DIR=dist-prod
 BUILD_CMD = ["pnpm", "build:prod"]
 
-REMOTE_HOST = "39.107.224.184"
+REMOTE_HOST = "<B服务器公网>"
 REMOTE_PORT = "22"
-REMOTE_USER = "root"
-REMOTE_PASS = "Moqi147852369"
+REMOTE_USER = "<账户>"
+REMOTE_PASS = "<密码>"
 REMOTE_WEB_DIR = "/opt/cc/web"
 
-VERIFY_URL = "https://www.cc.wenmoqi.top/"
+VERIFY_URL = "https://<B服务器域名>/"
 EXPECTED_KEYWORD = "<title"  # 部署成功标志：页面含 <title 标签；可按需替换业务关键字
 HEALTHY_HTTP_CODE = "200"
 

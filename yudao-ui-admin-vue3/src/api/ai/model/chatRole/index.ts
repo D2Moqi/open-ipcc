@@ -66,6 +66,11 @@ export const ChatRoleApi = {
     return await request.get({ url: `/ai/chat-role/category-list` })
   },
 
+  // 获取公开可选的聊天角色精简列表（供 IVR 设计器等公共场景下拉选择）
+  getChatRoleSimpleList: async () => {
+    return await request.get({ url: `/ai/chat-role/simple-list` })
+  },
+
   // 创建角色
   createMy: async (data: ChatRoleVO) => {
     return await request.post({ url: `/ai/chat-role/create-my`, data })

@@ -28,7 +28,7 @@ FreeSWITCH `mod_audio_fork` 模块的预编译二进制产物，供部署脚本�
 
 ## 来源
 
-导出自已部署服务器 `62.234.191.165` 的 FS 容器 `freeswitch_15560_18021_clpqzc`（`module_exists mod_audio_fork` 返回
+导出自已部署服务器 `<A服务器公网>` 的 FS 容器 `freeswitch_15560_18021_clpqzc`（`module_exists mod_audio_fork` 返回
 true，运行 26 小时健康），与现网实际加载的产物一致（两个已部署容器文件 SHA 相同）。
 
 ## 使用约束

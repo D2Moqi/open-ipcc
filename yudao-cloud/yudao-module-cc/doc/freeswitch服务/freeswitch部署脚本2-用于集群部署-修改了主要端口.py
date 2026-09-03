@@ -26,10 +26,10 @@ import sys
 import time
 
 # ==================== 远程服务器常量 ====================
-REMOTE_HOST = "62.234.191.165"
+REMOTE_HOST = "<A服务器公网>"
 SSH_PORT = 22
-SSH_USER = "ubuntu"
-SSH_PASSWORD = "Moqi147852369"
+SSH_USER = "<账户>"
+SSH_PASSWORD = "<密码>"
 
 # ==================== 端口常量 ====================
 INTERNAL_SIP_PORT = 16560
@@ -56,12 +56,12 @@ TEMP_CONTAINER_NAME = "freeswitch_tmp"
 CONFIG_BASE_PATH = "/etc"
 
 # ==================== 密码常量 ====================
-ESL_PASSWORD = "freeswitch@123321"
-DEFAULT_PASSWORD = "CHTQg8DOH1UU"
+ESL_PASSWORD = "<密码>"
+DEFAULT_PASSWORD = "<密码>"
 
 # ==================== 网络与 ACL 常量 ====================
 # FreeSWITCH 对外 SIP/RTP 公网 IP（与服务器公网 IP 一致）
-PUBLIC_IP = "62.234.191.165"
+PUBLIC_IP = "<A服务器公网>"
 # ESL ACL 允许连接的 CIDR（测试环境允许全部 IPv4）
 ACL_ALLOW_CIDR = "0.0.0.0/0"
 ACL_LIST_NAME = "event_socket.auto"
@@ -71,7 +71,7 @@ ACL_LIST_NAME = "event_socket.auto"
 # 注：JAVA_BACKEND_HOST 默认为 PUBLIC_IP，但部分云主机不支持 NAT 回环
 #     （hairpin NAT），主机/容器内无法通过公网 IP 访问本机服务。
 #     脚本会在部署前自动检测，若公网 IP 不可达则改用内网 IP。
-JAVA_BACKEND_HOST = "cc.wenmoqi.top"
+JAVA_BACKEND_HOST = "<B服务器域名>"
 JAVA_BACKEND_PORT = 443
 JAVA_BACKEND_PATH = "/admin-api/cc/fs/curl/api"
 # JAVA_BACKEND_URL 由 HOST/PORT/PATH 拼接，供显示与参考；运行时使用 effective_java_backend_url
@@ -1176,9 +1176,9 @@ def update_sip_profiles(ssh_client, config_dir):
     """
     增量更新 SIP Profiles：sip-ip/rtp-ip 设为 0.0.0.0 监听所有地址，ext-sip-ip/ext-rtp-ip 通告公网 IP。
 
-    需求背景（2026-08-14 hairpin 问题）：云厂商将公网 IP(62.234.191.165) 绑定在 lo 接口
-    （NAT 模式）。vanilla 默认 sip-ip=$${local_ip_v4}（解析为内网 IP 10.2.0.14）或显式绑定
-    公网 IP 时，服务器内部（如 sipproxy、另一台 FS）发往 62.234.191.165:SIP端口 的包路由到 lo
+    需求背景（2026-08-14 hairpin 问题）：云厂商将公网 IP(<A服务器公网>) 绑定在 lo 接口
+    （NAT 模式）。vanilla 默认 sip-ip=$${local_ip_v4}（解析为内网 IP <A服务器内网>）或显式绑定
+    公网 IP 时，服务器内部（如 sipproxy、另一台 FS）发往 <A服务器公网>:SIP端口 的包路由到 lo
     后无监听 socket 被内核丢弃（发卡），导致服务器内无法通过公网 IP 访问 docker-FS 的 SIP 端口。
     设置 sip-ip=0.0.0.0（监听所有接口含 lo）后，服务器内访问公网 IP 的 SIP 端口可达；
     ext-sip-ip 仍通告公网 IP，保证对端（坐席/网关）收到正确的 Contact/对外通告地址。
@@ -1215,7 +1215,7 @@ def start_freeswitch_container(ssh_client, sudo_prefix, container_name, config_d
          挂载配置目录到 /etc/freeswitch，使宿主机修改的配置生效。
          safarov/freeswitch 镜像内置 healthcheck 脚本 /healthcheck.sh 使用默认
          `fs_cli -x status`（连接 127.0.0.1:8021 无密码），但本部署把 ESL 端口改为
-         18021、密码改为 freeswitch@123321，导致内置 healthcheck 始终报 unhealthy
+         18021、密码改为 <密码>，导致内置 healthcheck 始终报 unhealthy
          （"Error Connecting"），虽然不影响 FreeSWITCH 核心功能，但状态不健康会误导
          运维且可能触发容器编排系统的自动重启策略。
          通过 --health-cmd 覆盖为带端口和密码的 fs_cli 命令，使 healthcheck 正常工作。

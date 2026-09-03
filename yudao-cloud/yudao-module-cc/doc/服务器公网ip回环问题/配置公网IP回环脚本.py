@@ -1,10 +1,10 @@
 import paramiko
 import time
 
-REMOTE_HOST = '62.234.191.165'
-SSH_USER = 'ubuntu'
-SSH_PASSWORD = 'Moqi147852369'
-PUBLIC_IP = '62.234.191.165'
+REMOTE_HOST = '<A服务器公网>'
+SSH_USER = '<账户>'
+SSH_PASSWORD = '<密码>'
+PUBLIC_IP = '<A服务器公网>'
 
 
 def ssh_exec_command(client, command, sudo=False, timeout=60):

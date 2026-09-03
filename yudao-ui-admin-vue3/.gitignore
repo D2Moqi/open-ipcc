@@ -9,3 +9,4 @@ auto-*.d.ts
 .history
 output/
 .playwright-cli/
+/yudao-ui-admin/

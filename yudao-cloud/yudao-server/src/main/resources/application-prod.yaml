@@ -48,7 +48,7 @@ spring:
       primary: master
       datasource:
         master:
-          url: jdbc:mysql://mysql6.sqlpub.com:3311/yudao_cc?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
           #          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=true&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true # MySQL Connector/J 5.X 连接的示例
           #          url: jdbc:postgresql://127.0.0.1:5432/ruoyi-vue-pro # PostgreSQL 连接的示例
           #          url: jdbc:oracle:thin:@127.0.0.1:1521:xe # Oracle 连接的示例
@@ -56,8 +56,8 @@ spring:
           #          url: jdbc:dm://127.0.0.1:5236?schema=RUOYI_VUE_PRO # DM 连接的示例
           #          url: jdbc:kingbase8://127.0.0.1:54321/test  # 人大金仓 KingbaseES 连接的示例
           #          url: jdbc:postgresql://127.0.0.1:5432/postgres # OpenGauss 连接的示例
-          username: yudaocc
-          password: JOg7SjhZVMbONFg6
+          username: root
+          password: 123456
           #          username: sa # SQL Server 连接的示例
           #          password: Yudao@2024 # SQL Server 连接的示例
           #          username: SYSDBA # DM 连接的示例
@@ -68,9 +68,9 @@ spring:
           #          password: 123456 # 瀚高 HighGo 连接的示例
         slave: # 模拟从库，可根据自己需要修改
           lazy: true # 开启懒加载，保证启动速度
-          url: jdbc:mysql://mysql6.sqlpub.com:3311/yudao_cc?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
-          username: yudaocc
-          password: JOg7SjhZVMbONFg6
+          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
+          username: root
+          password: 123456
   #        tdengine: # IoT 数据库（需要 IoT 物联网再开启噢！）
   #          url: jdbc:TAOS-RS://127.0.0.1:6041/ruoyi_vue_pro
   #          driver-class-name: com.taosdata.jdbc.rs.RestfulDriver
@@ -82,10 +82,10 @@ spring:
   # Redis 配置。Redisson 默认的配置足够使用，一般不需要进行调优
   data:
     redis:
-      host: 39.107.224.184 # 地址
+      host: 127.0.0.1 # 地址
       port: 6379 # 端口
       database: 0 # 数据库索引
-      password: Moqi147852369 # 密码，建议生产环境开启
+#    password: dev # 密码，建议生产环境开启
 
 --- #################### 定时任务相关配置 ####################
 
@@ -283,7 +283,7 @@ cc:
     auth-key: ipcc-audio-fork-2026 # mod_audio_fork 连接预共享密钥
     mix-type: mono # fork 混音类型(mono=仅主叫音频/mixed=双方混合/stereo=双声道)
     sample-rate: 16k # fork 音频采样率(8k=8000Hz/16k=16000Hz)
-    ws-url: ${CC_WS_URL:ws://127.0.0.1:48080}${cc.websocket.path} # CC 服务 WebSocket 地址(FS mod_audio_fork 连接用; 默认值仅单机部署有效: FS 与 cc-server 同机 host 网络用 127.0.0.1 直连, 避开 cc.wenmoqi.top DNS 误解析到 39.107.224.184 + 证书缺 SAN 问题; 集群部署需通过环境变量 CC_WS_URL 指定 cc-server 可达地址, 如 ws://62.234.191.165:48080)
+    ws-url: ws://127.0.0.1:58080${cc.websocket.path} # CC 服务 WebSocket 地址(FS mod_audio_fork 连接用)
 
 --- #################### ipcc-fs-esl 自研 ESL 客户端配置 ####################
 ipcc:
@@ -322,14 +322,7 @@ sipproxy:
   sip:
     port: 5561 # SIP 栈 UDP/TCP 监听端口（与 cc.sip.port 保持一致）
     bind-address: 0.0.0.0 # SIP 栈绑定地址（0.0.0.0 监听所有网卡）
-    public-ip: 62.234.191.165 # SIP 代理公网 IP（用于 Contact/Via 头改写，使外部能回信到此节点）
-    # 必须填本机真实公网 IP: 域名 cc.wenmoqi.top 在服务器侧/公网 DNS 均解析为
-    # 39.107.224.184(数据库/Redis 主机), 并非本机。若此处填域名, FS originate 的第二段
-    # INVITE 会被发往 39.107.224.184:5561(该机无 sipproxy 监听, 端口关闭), 第二段 INVITE
-    # 永远到不了 sipproxy, 坐席B收不到来电、出局/IVR 呼叫均失败。故此处必须用本机
-    # 真实公网 IP, 让 FS 直连本机 sipproxy(同机 host 网络, 62.234.191.165:5561 监听于 0.0.0.0)。
-    # 外部 JsSIP 坐席经 WSS(cc.wenmoqi.top:443 反代)接入, sipproxy→坐席消息走既有 WS 连接, 不受此值影响;
-    # 第三方原生 SIP 终端(如 pjsua)直连 62.234.191.165:5561, 与此值一致, 回程 Contact 可达。
+    public-ip: 127.0.0.1 # SIP 代理公网 IP（用于 Contact/Via 头改写，使外部能回信到此节点）
     public-port: 5561 # SIP 代理公网端口（通常与 sip.port 一致）
   websocket:
     enabled: true # 是否启用 SIP over WebSocket

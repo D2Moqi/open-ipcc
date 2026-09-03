@@ -1,0 +1,438 @@
+/* IVR 节点通用样式 - 白色主题，紧凑排版（全局引入，不随系统深色模式变化） */
+/* 注意：节点作为 HtmlNodeModel 渲染在 LogicFlow 画布中，会随画布 zoom 受到外层 svg/g 的 transform:scale() 影响。
+   为了避免多次缩放后子像素累积和描边视觉变形，在此：
+   1) 将节点放入独立 GPU 合成层（translateZ(0) + will-change）
+   2) 使用 content-box 作为 transform 盒模型，减少 width/height 缓存与 DOM offset 不一致的偏差
+   3) border 不使用外扩 box-shadow 叠加（会被 scale 放大），改为直接 border + border-radius 实现
+   4) 圆角、描边统一保持偶数像素值，避免缩放抖动
+   5) 所有子元素继承抗缩放属性，避免局部元素出现边框粗细不一致、文字模糊等问题 */
+.node-box {
+  background: #ffffff;
+  border-radius: 8px;
+  box-shadow: 0 2px 12px rgba(31, 35, 41, 0.08);
+  border: 1px solid #e5e6eb;
+  padding: 14px 16px;
+  min-width: 360px;
+  width: auto;
+  box-sizing: border-box;
+  /* ==== 抗缩放变形：开启硬件加速 + 固定 transform-box ==== */
+  transform-box: content-box;
+  transform-origin: center center;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  will-change: transform;
+  perspective: 1000px;
+  -webkit-perspective: 1000px;
+  image-rendering: -webkit-optimize-contrast;
+  /* 确保节点不被 canvas 层裁剪 */
+  isolation: isolate;
+  contain: layout paint style;
+  /* ==== 子元素继承抗缩放属性 ==== */
+}
+/* 节点内所有子元素继承硬件加速，避免缩放时局部子像素抖动 */
+.node-box,
+.node-box *,
+.node-box *::before,
+.node-box *::after {
+  backface-visibility: inherit;
+  -webkit-backface-visibility: inherit;
+}
+/* 节点内表单控件（输入框、选择框、数字输入框）抗缩放抖动：
+   使用偶数像素边框与圆角，禁用内阴影叠加，
+   避免缩放后 1px 边框由于子像素渲染在某些缩放比例（如 0.8、1.25）下出现 0.5px 半透明或 2px 过粗的视觉差异 */
+.node-box .el-input__wrapper,
+.node-box .el-select__wrapper,
+.node-box .el-textarea__inner,
+.node-box .el-input-number__decrease,
+.node-box .el-input-number__increase {
+  box-shadow: none;
+  border: 1px solid #e5e6eb;
+}
+.node-box .el-input__wrapper {
+  padding: 1px 11px;
+}
+/* 节点内按钮抗缩放：使用偶数像素边框，避免缩放时边框粗细跳变 */
+.node-box .el-button {
+  border-width: 1px;
+  image-rendering: -webkit-optimize-contrast;
+}
+/* 节点内图标与图片抗缩放模糊：
+   使用 optimize-contrast 而非 auto，避免 SVG/PNG 在非整数缩放比例下出现边缘锯齿或模糊 */
+.node-box img,
+.node-box svg {
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+}
+/* 节点内分隔线抗缩放：使用偶数像素高度，避免缩放后虚线比例不一致 */
+.node-box .el-divider {
+  border-top-width: 1px;
+}
+
+/* ========== 节点标题区域 ========== */
+.node-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #f0f0f0;
+}
+.title-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.title-right {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.img-box {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.w-14 {
+  width: 14px;
+}
+.h-14 {
+  height: 14px;
+}
+.titles {
+  font-size: 13px;
+  color: #1d2129;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ========== 操作按钮与菜单 ========== */
+.op-btn {
+  font-size: 12px;
+  color: #4080ff;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+.op-btn:hover {
+  color: #1a60ff;
+  background: #f0f7ff;
+}
+.op-menu {
+  padding: 4px 0;
+}
+.op-item {
+  padding: 7px 16px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #4e5969;
+  margin: 0;
+  transition: background 0.2s ease;
+}
+.op-item:hover {
+  background: #f2f3f5;
+  color: #1d2129;
+}
+
+/* ========== 节点内容区域 ========== */
+.node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.form-label {
+  width: 72px;
+  color: #4e5969;
+  text-align: right;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 28px;
+}
+.form-ctrl {
+  flex: 1;
+  min-width: 0;
+}
+.form-ctrl-sm {
+  width: 110px;
+  flex-shrink: 0;
+}
+.unit-text {
+  font-size: 12px;
+  color: #86909c;
+  flex-shrink: 0;
+}
+.switch-row {
+  height: 32px;
+}
+.switch-row .form-ctrl {
+  flex: none;
+}
+
+/* ========== 输出值区域 ========== */
+.output-row {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed #e5e6eb;
+}
+.output-val {
+  font-size: 12px;
+  color: #4080ff;
+  font-family: 'SF Mono', Monaco, Menlo, Consolas, 'Microsoft YaHei', monospace;
+  background: #f0f7ff;
+  padding: 4px 10px;
+  border-radius: 4px;
+  word-break: break-all;
+  line-height: 1.6;
+}
+/* 可复制输出值：单击复制交互态（cursor + hover 高亮） */
+.output-val-copyable {
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  transition: color 0.2s ease, background 0.2s ease, border-color 0.2s ease;
+}
+.output-val-copyable:hover {
+  color: #1a60ff;
+  background: #e2eeff;
+  border-color: #bedaff;
+}
+.output-val-copyable:active {
+  background: #d4e5ff;
+}
+/* 输出值区域下方提示文案（开始组件使用，弱化处理） */
+.output-tip {
+  margin: 4px 0 0;
+  /* 与 form-label(72px) + gap(8px) 对齐，使文案与输出值列表左侧对齐 */
+  padding-left: 80px;
+  font-size: 11px;
+  color: #86909c;
+  line-height: 1.5;
+}
+/* 输出值列表行：列表高度较大，标签顶部对齐避免居中悬浮 */
+.output-list-row {
+  align-items: flex-start;
+}
+
+/* ========== el-divider 紧凑样式覆盖 ========== */
+.node-body .el-divider {
+  margin: 10px 0;
+}
+.node-body .el-divider__text {
+  font-size: 11px;
+  color: #86909c;
+  background: #fff;
+  padding: 0 10px;
+}
+
+/* ========== Element Plus 组件样式修正 ========== */
+.node-box .el-card {
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  background: transparent;
+}
+.node-box .el-card__body {
+  padding: 0;
+}
+.node-box .el-form-item {
+  margin-bottom: 8px;
+}
+.node-box .el-form-item__label {
+  font-size: 12px;
+  color: #4e5969;
+  padding-bottom: 0;
+}
+
+/* 仅form-ctrl类控件宽度100%，自定义宽度类自行控制 */
+.node-box .form-ctrl.el-select,
+.node-box .form-ctrl.el-cascader,
+.node-box .form-ctrl.el-input-number,
+.node-box .form-ctrl.el-input {
+  width: 100%;
+}
+.node-box .el-radio-group {
+  display: flex;
+  gap: 6px;
+}
+.node-box .el-radio {
+  margin-right: 0;
+}
+.node-box .el-button--small {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+/* 输入框和选择框统一样式 */
+.node-box .el-input__wrapper,
+.node-box .el-select__wrapper,
+.node-box .el-input-number__decrease,
+.node-box .el-input-number__increase {
+  border-radius: 4px;
+}
+
+/* ========== 输出值列表样式（开始节点使用） ========== */
+/* 不限高度不滚动：11 个输出值全部展开，节点高度由内容撑开并通过 syncNodeSize 同步 foreignObject 尺寸 */
+.output-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  padding: 8px 10px;
+  background: #f7f8fa;
+}
+/* 列表内的输出值复用 .output-val 基础样式，收敛内边距与字号适配紧凑列表 */
+.output-list .output-val {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* ========== 判断器节点特有样式 ========== */
+.node-condition {
+  min-width: 500px;
+  width: auto;
+}
+.node-condition .branches {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.node-condition .branch-item {
+  position: relative;
+  background: #f7f8fa;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+/* ELSE_IF 分支可删除时，右侧预留删除按钮空间，避免按钮被 SVG foreignObject 裁剪 */
+.node-condition .branch-item.branch-removable {
+  padding-right: 32px;
+}
+/* ELSE_IF 分支右侧中间删除按钮（定位在分支内部，避免被 foreignObject 裁剪） */
+.node-condition .branch-remove-icon {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  cursor: pointer;
+  color: #f53f3f;
+  font-size: 14px;
+  padding: 2px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid #f53f3f;
+  z-index: 10;
+  transition: all 0.2s ease;
+}
+.node-condition .branch-remove-icon:hover {
+  color: #fff;
+  background: #f53f3f;
+}
+.node-condition .branch-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: nowrap;
+}
+.node-condition .branch-label {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid;
+  flex-shrink: 0;
+  line-height: 1.6;
+}
+.node-condition .label-if {
+  color: #722ed1;
+  background: #f9f0ff;
+  border-color: #d3adf7;
+}
+.node-condition .label-else-if {
+  color: #1677ff;
+  background: #e6f4ff;
+  border-color: #91caff;
+}
+.node-condition .label-else {
+  color: #00b42a;
+  background: #e8ffea;
+  border-color: #9ae6a8;
+}
+.node-condition .match-text {
+  font-size: 12px;
+  color: #86909c;
+  flex-shrink: 0;
+}
+.node-condition .match-select {
+  width: 72px;
+  flex-shrink: 0;
+}
+.node-condition .condition-row {
+  margin-bottom: 6px;
+}
+.node-condition .cond-row-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.node-condition .cond-var {
+  width: 170px;
+  flex-shrink: 0;
+}
+.node-condition .cond-op {
+  width: 100px;
+  flex-shrink: 0;
+}
+.node-condition .cond-val {
+  flex: 1;
+  min-width: 0;
+}
+.node-condition .remove-icon {
+  cursor: pointer;
+  color: #f53f3f;
+  font-size: 14px;
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 3px;
+  transition: all 0.2s ease;
+}
+.node-condition .remove-icon:hover {
+  color: #cb2634;
+  background: #ffece8;
+}
+.node-condition .add-cond-btn {
+  margin-top: 2px;
+}
+.node-condition .add-branch-btn {
+  margin-top: 10px;
+  text-align: center;
+  padding-top: 8px;
+  border-top: 1px dashed #e5e6eb;
+}
+
+/* ========== 转接节点样式 ========== */
+.node-transfer {
+  min-width: 380px;
+  width: auto;
+}

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """查看 FS internal.xml 和 external.xml 完整配置，以及 TLS 证书目录。"""
-import sys
 import paramiko
+import sys
 
-REMOTE_HOST = "62.234.191.165"
-SSH_USER = "ubuntu"
-SSH_PASSWORD = "Moqi147852369"
+REMOTE_HOST = "<A服务器公网>"
+SSH_USER = "<账户>"
+SSH_PASSWORD = "<密码>"
 
 
 def run(client, cmd):

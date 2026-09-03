@@ -46,10 +46,10 @@ import sys
 import time
 
 # ==================== 远程服务器常量 ====================
-REMOTE_HOST = "62.234.191.165"
+REMOTE_HOST = "<A服务器公网>"
 SSH_PORT = 22
-SSH_USER = "ubuntu"
-SSH_PASSWORD = "Moqi147852369"
+SSH_USER = "<账户>"
+SSH_PASSWORD = "<密码>"
 
 # ==================== 编译版本常量（与原部署脚本保持一致，改动需同步） ====================
 FS_IMAGE = "freeswitch:1.10.12"

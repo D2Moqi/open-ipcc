@@ -7,32 +7,32 @@
 #   1. 本地执行后端打包（mvn package -pl yudao-server -am -DskipTests，增量不含 clean）
 #      产物：yudao-server/target/yudao-server.jar
 #      （若本地无 mvn，依赖 agent 用 ij-debugger 预打包生成 jar 后跳过本步）
-#   2. 通过 SCP 上传至服务器 62.234.191.165（ubuntu）的 /home/ubuntu/cc 目录
+#   2. 通过 SCP 上传至服务器 <A服务器公网>（ubuntu）的 /home/<账户>/cc 目录
 #   3. SSH 远程执行 bash deploy.sh deploy 启动服务，并保障 JAVA_OPS 含
 #      -Dfile.encoding=UTF-8 以修复中文乱码；实时捕获 nohup.out 应用日志
 #   4. 多重验证启动成功：Tomcat 就绪 + Spring 上下文完成 + 进程存活，全部通过后
 #      向 startup.log 写入聚合标志「项目启动成功」（真实日志不含该串，由本脚本收口）
-#   5. curl 访问 https://cc.wenmoqi.top/admin-api 校验 HTTP 状态 + JSON 结构
+#   5. curl 访问 https://<B服务器域名>/admin-api 校验 HTTP 状态 + JSON 结构
 #   6. 完整错误处理 + 健康检查重试（最多 5 次，间隔 5 秒）
 # 依赖：mvn（可选）、sshpass、scp、ssh、curl
 # 说明：脚本单次执行完整部署；稳定性由调用方多次运行本脚本验证。
 # =============================================================================
 import os
+import subprocess
 import sys
 import time
-import subprocess
 
 # ----------------------------- 配置区（按实际修改） -----------------------------
-BACKEND_DIR = "/Users/wenjiaqi/Documents/ipcc/yudao-cloud"
+BACKEND_DIR = "<本地项目根路径>/yudao-cloud"
 MVN_MODULE = "yudao-server"
 JAR_PATH = os.path.join(BACKEND_DIR, MVN_MODULE, "target", f"{MVN_MODULE}.jar")
 PACKAGE_CMD = ["mvn", "package", "-pl", MVN_MODULE, "-am", "-DskipTests"]
 
-REMOTE_HOST = "62.234.191.165"
+REMOTE_HOST = "<A服务器公网>"
 REMOTE_PORT = "22"
-REMOTE_USER = "ubuntu"
+REMOTE_USER = "<账户>"
 REMOTE_PASS = ""  # 若使用密码登录请填写；推荐配置 SSH 公钥免密（留空）
-REMOTE_CC_DIR = "/home/ubuntu/cc"
+REMOTE_CC_DIR = "/home/<账户>/cc"
 REMOTE_DEPLOY_SCRIPT = f"{REMOTE_CC_DIR}/deploy.sh"
 # deploy.sh 的 start() 将 Spring Boot 真实日志重定向到 nohup.out；
 # startup.log 为 deploy.sh 自身的 echo 包装日志 + 本脚本追加的聚合成功标志。
@@ -44,7 +44,7 @@ FLAG_SPRING = "Started YudaoServerApplication"  # Spring 上下文启动完成
 AGG_SUCCESS_FLAG = "项目启动成功"
 REMOTE_SUCCESS_LOG = f"{REMOTE_CC_DIR}/startup.log"
 
-VERIFY_URL = "https://cc.wenmoqi.top/admin-api"
+VERIFY_URL = "https://<B服务器域名>/admin-api"
 HEALTHY_HTTP_CODE = "200"
 CURL_TIMEOUT = 30
 

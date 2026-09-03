@@ -12,10 +12,10 @@ except ImportError:
     print("需要 paramiko: pip install paramiko")
     sys.exit(1)
 
-REMOTE_HOST = "62.234.191.165"
+REMOTE_HOST = "<A服务器公网>"
 SSH_PORT = 22
-SSH_USER = "ubuntu"
-SSH_PASSWORD = "Moqi147852369"
+SSH_USER = "<账户>"
+SSH_PASSWORD = "<密码>"
 
 # 找到当前活动的 FS 容器名（端口 16560/18121 是 fs2）
 EXPECTED_PORTS = ["16560", "18121"]
@@ -55,7 +55,7 @@ def main():
     # 简化：直接用 docker ps 找
     if not target:
         for c in containers:
-            t = run(client, f"docker exec {c} fs_cli -P 18121 -p freeswitch@123321 -x 'status' 2>/dev/null")
+            t = run(client, f"docker exec {c} fs_cli -P 18121 -p <密码> -x 'status' 2>/dev/null")
             if "UP" in t:
                 target = c
                 break
@@ -91,24 +91,24 @@ def main():
 
     # 5. 查看已加载的模块
     print("\n===== 已加载模块列表（媒体相关）=====")
-    out = run(client, f"docker exec {target} fs_cli -P 18121 -p freeswitch@123321 -x 'module_exists mod_opus'")
+    out = run(client, f"docker exec {target} fs_cli -P 18121 -p <密码> -x 'module_exists mod_opus'")
     print(f"mod_opus: {out.strip()}")
-    out = run(client, f"docker exec {target} fs_cli -P 18121 -p freeswitch@123321 -x 'module_exists mod_rtc')")
+    out = run(client, f"docker exec {target} fs_cli -P 18121 -p <密码> -x 'module_exists mod_rtc')")
     print(f"mod_rtc: {out.strip()}")
 
     # 6. 查看 internal profile 完整配置
     print("\n===== sofia status profile internal 完整 =====")
-    out = run(client, f"docker exec {target} fs_cli -P 18121 -p freeswitch@123321 -x 'sofia status profile internal'")
+    out = run(client, f"docker exec {target} fs_cli -P 18121 -p <密码> -x 'sofia status profile internal'")
     print(out)
 
     # 7. 查看 external profile 完整配置
     print("\n===== sofia status profile external 完整 =====")
-    out = run(client, f"docker exec {target} fs_cli -P 18121 -p freeswitch@123321 -x 'sofia status profile external'")
+    out = run(client, f"docker exec {target} fs_cli -P 18121 -p <密码> -x 'sofia status profile external'")
     print(out)
 
     # 8. 查看当前的活动通道（如果有）
     print("\n===== 当前活动通道 =====")
-    out = run(client, f"docker exec {target} fs_cli -P 18121 -p freeswitch@123321 -x 'show channels'")
+    out = run(client, f"docker exec {target} fs_cli -P 18121 -p <密码> -x 'show channels'")
     print(out)
 
     client.close()
