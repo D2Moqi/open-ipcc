@@ -13,7 +13,6 @@
 </cite>
 
 ## 更新摘要
-
 **变更内容**
 
 - 更新了号码管理功能，取消位数限制并支持特殊字符（#、-、 (、)）
@@ -63,7 +62,6 @@ CC_SERVER --> FS_ESL
 ```
 
 **图表来源**
-
 - [CallDisplayController.java:30-34](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallDisplayController.java#L30-L34)
 - [SysAgentGroupController.java:38-42](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/SysAgentGroupController.java#L38-L42)
 - [CallRouteController.java:30-34](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallRouteController.java#L30-L34)
@@ -101,7 +99,6 @@ Service-->>Client : "200 OK + 资源ID"
 ```
 
 **图表来源**
-
 - [CallDisplayController.java:39-44](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallDisplayController.java#L39-L44)
 - [SysAgentGroupController.java:49-54](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/SysAgentGroupController.java#L49-L54)
 - [CallRouteController.java:39-44](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallRouteController.java#L39-L44)
@@ -122,13 +119,11 @@ Service-->>Client : "200 OK + 资源ID"
   - 参考统一错误码常量
 
 **更新** 电话号码验证规则已更新，现在支持更灵活的格式：
-
 - 后端验证：使用正则表达式 `^[0-9#\-()]+$` 进行格式校验
 - 前端验证：实时过滤非法字符，仅允许数字、#、-、 (、)
 - 支持的号码格式示例：`9#`、`400-123-4567`、`(010)12345678`
 
 **章节来源**
-
 - [CallDisplaySaveReqVO.java:15-18](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/CallDisplaySaveReqVO.java#L15-L18)
 - [CallDisplayForm.vue:54-67](file://yudao-ui-admin-vue3/src/views/cc/calldisplay/CallDisplayForm.vue#L54-L67)
 - [CallDisplayForm.vue:117-123](file://yudao-ui-admin-vue3/src/views/cc/calldisplay/CallDisplayForm.vue#L117-L123)
@@ -144,7 +139,6 @@ Service-->>Client : "200 OK + 资源ID"
   - 按区域/渠道/产品线划分号码池，配合路由策略定向呼出
 
 **章节来源**
-
 - [SysAgentGroupController.java:49-80](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/SysAgentGroupController.java#L49-L80)
 - [SysAgentGroupSaveReqVO.java:13-50](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/SysAgentGroupSaveReqVO.java#L13-L50)
 
@@ -159,7 +153,6 @@ Service-->>Client : "200 OK + 资源ID"
   - 不同团队使用不同的主叫号码，确保合规与品牌一致性
 
 **章节来源**
-
 - [SysAgentGroupController.java:82-105](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/SysAgentGroupController.java#L82-L105)
 - [SysAgentGroupSaveReqVO.java:45-50](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/SysAgentGroupSaveReqVO.java#L45-L50)
 
@@ -174,7 +167,6 @@ Service-->>Client : "200 OK + 资源ID"
   - 为不同渠道或地区建立独立号码池，隔离风险与容量
 
 **章节来源**
-
 - [CallDisplayController.java:39-108](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallDisplayController.java#L39-L108)
 - [CallDisplayRespVO.java:15-34](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/CallDisplayRespVO.java#L15-L34)
 
@@ -210,11 +202,9 @@ Fail --> End
 ```
 
 **图表来源**
-
 - [SysAgentGroupSaveReqVO.java:26-43](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/SysAgentGroupSaveReqVO.java#L26-L43)
 
 **章节来源**
-
 - [SysAgentGroupSaveReqVO.java:26-43](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/SysAgentGroupSaveReqVO.java#L26-L43)
 
 ### 状态监控 API
@@ -228,7 +218,6 @@ Fail --> End
   - 实时监控号码质量，及时切换或告警
 
 **章节来源**
-
 - [CallDisplayPageReqVO.java:16-28](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/CallDisplayPageReqVO.java#L16-L28)
 
 ### 与路由规则的关联配置
@@ -241,7 +230,6 @@ Fail --> End
   - 根据来电时间/号码段/渠道选择不同路由路径
 
 **章节来源**
-
 - [CallRouteController.java:39-110](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallRouteController.java#L39-L110)
 
 ## 依赖关系分析
@@ -260,7 +248,6 @@ ESL --> FS["FreeSWITCH"]
 ```
 
 **图表来源**
-
 - [CallDisplayController.java:30-34](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallDisplayController.java#L30-L34)
 - [SysAgentGroupController.java:38-42](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/SysAgentGroupController.java#L38-L42)
 - [CallRouteController.java:30-34](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/CallRouteController.java#L30-L34)
@@ -308,6 +295,5 @@ ESL --> FS["FreeSWITCH"]
     - 组合格式：`(021)-8765-4321`
 
 **章节来源**
-
 - [CallDisplaySaveReqVO.java:15-18](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/admin/call/vo/CallDisplaySaveReqVO.java#L15-L18)
 - [CallDisplayForm.vue:13](file://yudao-ui-admin-vue3/src/views/cc/calldisplay/CallDisplayForm.vue#L13)

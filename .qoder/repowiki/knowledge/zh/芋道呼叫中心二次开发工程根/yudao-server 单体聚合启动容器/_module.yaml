@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: server_aggregator
-title: yudao-server 单体聚合启动容器
-scope:
-    - yudao-cloud/yudao-server/
-source_files: []
-depends_on: []
-related_to: []

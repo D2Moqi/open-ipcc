@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: module_mall/trade
-title: 交易订单模块（Trade）
-scope:
-    - yudao-cloud/yudao-module-mall/yudao-module-trade-api/
-    - yudao-cloud/yudao-module-mall/yudao-module-trade-server/
-source_files: []
-depends_on: []
-related_to: []

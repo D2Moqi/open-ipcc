@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: module_iot/core/messagebus
-title: IoT 消息总线抽象与多实现
-scope:
-    - yudao-cloud/yudao-module-iot/yudao-module-iot-core/src/main/java/cn/iocoder/yudao/module/iot/core/messagebus/
-source_files: []
-depends_on: []
-related_to: []

@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: module_iot/server
-title: IoT 服务启动模块（yudao-module-iot-server）
-scope:
-    - yudao-cloud/yudao-module-iot/yudao-module-iot-server/
-source_files: []
-depends_on: []
-related_to: []

@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: module_mall/promotion
-title: 营销活动与促销服务模块（Promotion）
-scope:
-    - yudao-cloud/yudao-module-mall/yudao-module-promotion-api/
-    - yudao-cloud/yudao-module-mall/yudao-module-promotion-server/
-source_files: []
-depends_on: []
-related_to: []

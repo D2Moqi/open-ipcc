@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: module_iot
-title: IoT 物联网设备接入与业务服务模块
-scope:
-    - yudao-cloud/yudao-module-iot/
-source_files: []
-depends_on: []
-related_to: []

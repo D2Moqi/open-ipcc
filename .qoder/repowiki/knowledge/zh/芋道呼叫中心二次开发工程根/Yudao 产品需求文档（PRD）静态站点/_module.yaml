@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: product_docs
-title: Yudao 产品需求文档（PRD）静态站点
-scope:
-    - yudao-prd/
-source_files: []
-depends_on: []
-related_to: []

@@ -2,8 +2,10 @@
 <project version="4">
   <component name="WorkspaceSettings">
     <project name="yudao" path="$PROJECT_DIR$/yudao-cloud">
+      <vcs id="Git" remoteUrl="https://gitee.com/ipcc-ai/yudao-cloud.git" />
     </project>
     <project name="yudao-ui-admin-vue3" path="$PROJECT_DIR$/yudao-ui-admin-vue3">
+      <vcs id="Git" remoteUrl="https://gitee.com/ipcc-ai/yudao-ui-admin-vue3.git" />
     </project>
     <option name="workspace" value="true" />
   </component>

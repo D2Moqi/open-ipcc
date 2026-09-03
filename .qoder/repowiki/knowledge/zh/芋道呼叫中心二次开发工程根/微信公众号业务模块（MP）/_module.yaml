@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: module_mp
-title: 微信公众号业务模块（MP）
-scope:
-    - yudao-cloud/yudao-module-mp/
-source_files: []
-depends_on: []
-related_to: []

@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: yudao_framework/data_access
-title: MyBatis & Redis 数据访问 Starter
-scope:
-    - yudao-cloud/yudao-framework/yudao-spring-boot-starter-mybatis/
-    - yudao-cloud/yudao-framework/yudao-spring-boot-starter-redis/
-source_files: []
-depends_on: []
-related_to: []

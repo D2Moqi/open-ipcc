@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: gateway
-title: API 网关服务（Spring Cloud Gateway）
-scope:
-    - yudao-cloud/yudao-gateway/
-source_files: []
-depends_on: []
-related_to: []

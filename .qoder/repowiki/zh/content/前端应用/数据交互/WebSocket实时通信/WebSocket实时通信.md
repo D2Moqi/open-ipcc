@@ -18,9 +18,7 @@
 </cite>
 
 ## 更新摘要
-
 **变更内容**
-
 - 新增 FORCE_LOGOUT_REQUEST/FORCE_LOGOUT_RESPONSE 消息类型支持，实现坐席强制下线功能
 - 增强前端 WebSocketClient.ts 的消息类型定义和回调注册机制
 - 完善后端认证回调机制，支持重复登录检测和强制踢下线流程
@@ -80,7 +78,6 @@ APP --> WS_STARTER
 ```
 
 图表来源
-
 - [CC 模块启动类与配置](file://yudao-cloud/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/CcServerApplication.java)
 - [CC 模块控制器（WebSocket 路由示例）](file://yudao-cloud/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/web/WebSocketController.java)
 - [CC 模块会话管理器（连接管理示例）](file://yudao-cloud/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/service/SessionManager.java)
@@ -90,7 +87,6 @@ APP --> WS_STARTER
 - [前端软电话 WebSocket 客户端](file://yudao-ui-admin-vue3/src/layout/components/SoftPhone/src/WebSocketClient.ts)
 
 章节来源
-
 - [CC 模块启动类与配置](file://yudao-cloud/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/CcServerApplication.java)
 - [CC 模块控制器（WebSocket 路由示例）](file://yudao-cloud/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/controller/web/WebSocketController.java)
 - [CC 模块会话管理器（连接管理示例）](file://yudao-cloud/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/service/SessionManager.java)
@@ -119,7 +115,6 @@ APP --> WS_STARTER
 - [前端软电话 WebSocket 客户端](file://yudao-ui-admin-vue3/src/layout/components/SoftPhone/src/WebSocketClient.ts)
 
 ## 架构总览
-
 下图展示了从前端连接到后端处理的核心流程，包括鉴权、会话注册、消息分发与推送，以及新增的强制下线处理流程。
 
 ```mermaid

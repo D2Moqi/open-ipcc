@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: module_member
-title: 会员业务模块（用户、积分、等级、签到、地址等）
-scope:
-    - yudao-cloud/yudao-module-member/
-source_files: []
-depends_on: []
-related_to: []

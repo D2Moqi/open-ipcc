@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: module_iot/gateway/mqtt_protocol
-title: IoT 网关 MQTT 协议实现
-scope:
-    - yudao-cloud/yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/
-source_files: []
-depends_on: []
-related_to: []

@@ -36,9 +36,7 @@
 </cite>
 
 ## 更新摘要
-
 **所做更改**
-
 - 新增坐席唯一登录检查机制，通过CcAuthenticationCallback接口实现重复登录检测与强制下线逻辑
 - 增强WsRegisterRequestHandler处理器，集成认证回调和会话管理功能
 - 扩展WebSocket消息通信能力，支持强制下线消息类型定义
@@ -62,7 +60,6 @@
 **更新** 新增了坐席唯一登录检查机制，通过CcAuthenticationCallback接口实现重复登录检测和强制下线功能，增强了注册流程的安全性和用户体验。
 
 ## 项目结构
-
 该模块采用完全独立的Spring Boot工程组织，围绕"入口→工厂→处理器→转发→节点/会话管理"的分层进行解耦设计，并通过扩展点接口与父程序解耦，默认实现保证可独立启动。
 
 ```mermaid
@@ -74,8 +71,8 @@ D --> E["节点/会话管理层<br/>SipNodeManager / SipSessionManager"]
 A --> F["WebSocket接入层<br/>SipWebSocketHandler + Frame重组"]
 A --> G["集群广播层<br/>WsMessageSender + Consumer"]
 A --> H["扩展点API层<br/>api/* + defaults/*"]
-  H --> I["认证回调层<br/>AuthenticationCallback"]
-  I --> J["CC模块实现<br/>CcAuthenticationCallback"]
+H --> I["认证回调层<br/>AuthenticationCallback"]
+I --> J["CC模块实现<br/>CcAuthenticationCallback"]
 ```
 
 图表来源
@@ -108,7 +105,7 @@ participant Client as "客户端/第三方"
 participant Entry as "SipProxyService"
 participant Factory as "请求处理器工厂"
 participant Handler as "具体处理器"
-  participant Callback as "认证回调"
+participant Callback as "认证回调"
 participant Forward as "SipMessageForwarder"
 participant Node as "SipNodeManager"
 participant Session as "SipSessionManager"
@@ -117,12 +114,12 @@ participant WS as "WebSocket坐席"
 Client->>Entry : SIP请求(UDP/TCP或WS)
 Entry->>Factory : 按方法路由
 Factory->>Handler : 调用handle()
-  alt REGISTER请求
-    Handler ->> Session: 查询现有会话
-    Handler ->> Callback: onDuplicateLogin检查
-    Callback -->> Handler: 允许/拒绝新登录
-    Handler ->> Session: 清理旧会话(如允许)
-  end
+alt REGISTER请求
+Handler->>Session : 查询现有会话
+Handler->>Callback : onDuplicateLogin检查
+Callback-->>Handler : 允许/拒绝新登录
+Handler->>Session : 清理旧会话(如允许)
+end
 Handler->>Node : 选择FS/第三方节点
 Handler->>Forward : 转发(含头域改写/SDP处理)
 alt 豁免场景
@@ -252,7 +249,6 @@ Factory->>Forward : 按策略转发至WS/FS/第三方
 - [sipproxy组件架构设计.md:137-146](file://yudao-cloud/yudao-module-cc/ipcc-sipproxy/sipproxy组件架构设计.md#L137-L146)
 
 ### 认证回调层：CcAuthenticationCallback
-
 - **新增** 职责：实现AuthenticationCallback接口，提供坐席唯一登录检查和强制下线功能。
 - 核心功能：
   - onSuccess：记录认证成功日志，审计登录事件。
@@ -267,17 +263,14 @@ Factory->>Forward : 按策略转发至WS/FS/第三方
   5. 新客户端重新发起REGISTER请求完成登录
 
 章节来源
-
 - [CcAuthenticationCallback.java:31-101](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/sipproxy/integration/CcAuthenticationCallback.java#L31-L101)
 
 ### WebSocket消息通信层
-
 - **新增** CcWebSocketMessageSender：提供WebSocket消息发送接口，支持按用户、用户类型、会话ID发送消息。
 - 消息类型：支持FORCE_LOGOUT_REQUEST等专用消息类型，用于强制下线通知。
 - 前端集成：WebSocketClient.ts中注册消息回调，处理强制下线请求和用户确认。
 
 章节来源
-
 - [CcWebSocketMessageSender.java:10-53](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/websocket/core/sender/CcWebSocketMessageSender.java#L10-L53)
 - [WebSocketClient.ts](file://yudao-ui-admin-vue3/src/layout/components/SoftPhone/src/WebSocketClient.ts)
 
@@ -316,7 +309,7 @@ class SipSessionManager {
 +getSessionInfo()
 +cacheRegisterInfo()
 +getSessionIdByUser()
-  +cleanupRegisterInfo()
++cleanupRegisterInfo()
 }
 class GatewayAuthManager {
 +handle407Challenge()
@@ -327,19 +320,19 @@ class UnifiedResponseHandler {
 +correctSourceBySessionContext()
 +forwardResponse()
 }
-  class CcAuthenticationCallback {
-    +onSuccess()
-    +onFailure()
-    +onDuplicateLogin()
-    +forceCleanupOldSession()
-  }
+class CcAuthenticationCallback {
++onSuccess()
++onFailure()
++onDuplicateLogin()
++forceCleanupOldSession()
+}
 SipProxyService --> SipMessageForwarder : "依赖"
 SipProxyService --> UnifiedResponseHandler : "依赖"
 SipMessageForwarder --> SipNodeManager : "依赖"
 SipMessageForwarder --> SipSessionManager : "依赖"
 SipMessageForwarder --> GatewayAuthManager : "依赖"
 UnifiedResponseHandler --> SipSessionManager : "依赖"
-  CcAuthenticationCallback --> SipSessionManager: "依赖"
+CcAuthenticationCallback --> SipSessionManager : "依赖"
 ```
 
 图表来源
@@ -424,32 +417,30 @@ ForwardResp --> EndR
 - [sipproxy组件架构设计.md:467-520](file://yudao-cloud/yudao-module-cc/ipcc-sipproxy/sipproxy组件架构设计.md#L467-L520)
 
 ### REGISTER请求处理流程图（新增）
-
 ```mermaid
 flowchart TD
-  RegStart(["收到REGISTER请求"]) --> CheckAuth{"是否有Authorization头?"}
-  CheckAuth -->|否| Send401["发送401 Unauthorized挑战"]
-  Send401 --> RegEnd(["等待重新注册"])
-  CheckAuth -->|是| Validate["验证Digest凭证"]
-  Validate --> Valid{"验证通过?"}
-  Valid -->|否| Send403["发送403 Forbidden"]
-  Send403 --> RegEnd
-  Valid -->|是| CheckDup{"检查重复登录"}
-  CheckDup --> Dup{"是否存在其他会话?"}
-  Dup -->|否| CacheReg["缓存注册信息"]
-  CacheReg --> NotifySuccess["触发认证成功回调"]
-  NotifySuccess --> Send200["发送200 OK响应"]
-  Send200 --> RegEnd
-  Dup -->|是| CallBack["调用onDuplicateLogin"]
-  CallBack --> Allow{"允许新登录?"}
-  Allow -->|否| Send403Dup["发送403 Duplicate Login"]
-  Send403Dup --> RegEnd
-  Allow -->|是| Cleanup["清理旧会话注册信息"]
-  Cleanup --> CacheReg
+RegStart(["收到REGISTER请求"]) --> CheckAuth{"是否有Authorization头?"}
+CheckAuth --> |否| Send401["发送401 Unauthorized挑战"]
+Send401 --> RegEnd(["等待重新注册"])
+CheckAuth --> |是| Validate["验证Digest凭证"]
+Validate --> Valid{"验证通过?"}
+Valid --> |否| Send403["发送403 Forbidden"]
+Send403 --> RegEnd
+Valid --> |是| CheckDup{"检查重复登录"}
+CheckDup --> Dup{"是否存在其他会话?"}
+Dup --> |否| CacheReg["缓存注册信息"]
+CacheReg --> NotifySuccess["触发认证成功回调"]
+NotifySuccess --> Send200["发送200 OK响应"]
+Send200 --> RegEnd
+Dup --> |是| CallBack["调用onDuplicateLogin"]
+CallBack --> Allow{"允许新登录?"}
+Allow --> |否| Send403Dup["发送403 Duplicate Login"]
+Send403Dup --> RegEnd
+Allow --> |是| Cleanup["清理旧会话注册信息"]
+Cleanup --> CacheReg
 ```
 
 图表来源
-
 - [WsRegisterRequestHandler.java:79-136](file://yudao-cloud/yudao-module-cc/ipcc-sipproxy/src/main/java/cn/ipcc/sipproxy/core/handler/request/ws/WsRegisterRequestHandler.java#L79-L136)
 - [CcAuthenticationCallback.java:74-101](file://yudao-cloud/yudao-module-cc/yudao-module-cc-server/src/main/java/cn/iocoder/yudao/module/cc/sipproxy/integration/CcAuthenticationCallback.java#L74-L101)
 
