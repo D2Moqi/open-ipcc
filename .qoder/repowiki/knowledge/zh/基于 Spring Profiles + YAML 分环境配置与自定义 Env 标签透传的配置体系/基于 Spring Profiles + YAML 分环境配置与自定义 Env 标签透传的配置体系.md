@@ -79,7 +79,6 @@ source_files:
 - AI 相关密钥（OpenAI、Anthropic、DashScope、DeepSeek、Gemini、Doubao、Hunyuan 等）通过 `${ENV_VAR:default}` 形式注入，便于容器化时以环境变量覆盖。
 
 ### 3.3 环境标签（tag）透传机制
-
 - 入口：HTTP 请求携带 `tag` 请求头 → `EnvWebFilter` 提取并压入 `EnvContextHolder`。
 - 上下文：`EnvContextHolder` 用 `TransmittableThreadLocal` 维护 tag 栈，保证异步/线程池场景下正确传递。
 - 透传：Feign 调用时 `EnvRequestInterceptor` 自动把 tag 放入下游请求 header；负载均衡器可通过 `EnvLoadBalancerClient` 按
@@ -88,7 +87,6 @@ source_files:
   `${HOSTNAME}` 解析为真实主机名，解决 IDE 调试工具无法读取环境变量的问题。
 
 ### 3.4 多数据源与多 MQ
-
 - 通过 `spring.datasource.dynamic` 配置 master/slave 双数据源，dev/prod 分别覆盖 URL、用户名、密码。
 - RocketMQ、RabbitMQ、Kafka 三套 MQ 同时声明，各 profile 只覆盖实际使用的 broker 地址，运行时由上层逻辑决定走哪条通道。
 

@@ -40,7 +40,6 @@ source_files:
 | LiveKit POC         | `yudao-cloud/script/livekit-poc/docker-compose.yml`                                             | 独立音视频 POC 的 compose 编排                                                                    |
 
 ## 3. 架构与约定
-
 ### 3.1 版本管理
 
 - 统一使用 `${revision}` 属性（当前 `2026.07-jdk25-SNAPSHOT`），由 `flatten-maven-plugin` 在 `process-resources` 阶段展开，BOM
@@ -55,7 +54,6 @@ source_files:
 - 仓库源固定为华为云与阿里云 Maven 镜像，加速依赖下载。
 
 ### 3.3 模块划分与产物
-
 - 每个业务域拆分为 `api`（接口契约）+ `server`（可执行 Jar）双模块，例如 `yudao-module-cc-api` / `yudao-module-cc-server`。
 - `yudao-server` 是聚合启动入口，其余 `yudao-module-*-server` 各自独立打包为可运行 Jar，配合 Nacos 注册中心组成微服务。
 - Gateway 模块 `yudao-gateway` 单独存在，作为统一入口。
@@ -70,13 +68,11 @@ source_files:
 - 日志通过 volume 挂载到宿主机 `/docker/yudao-cloud/logs`。
 
 ### 3.5 前端构建
-
 - 使用 pnpm 包管理器（`pnpm-lock.yaml`），Node ≥ 20.19.0。
 - 通过 `--mode env.local/dev/test/stage/prod` 切换 `.env.*` 配置文件，分别输出到 `dist` 或 `dist-prod` 目录。
 - Vite 构建启用 oxc 压缩、按需拆分 echarts/form-create 等大包，支持 source map 开关。
 
 ## 4. 约定与约束
-
 - **统一版本**：所有第三方依赖必须经 `yudao-dependencies` BOM 管理，禁止在子模块直接指定版本号（除排除冲突外）。
 - **统一 revision**：项目版本通过 `${revision}` 单一入口维护，由 flatten 插件自动展开，不得在子模块硬编码版本。
 - **JDK 要求**：源码编译目标为 JDK 25（`java.version=25`），但 CI 矩阵仍覆盖 8/11/17 以保证向后兼容。

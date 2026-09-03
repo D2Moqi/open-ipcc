@@ -61,7 +61,6 @@ source_files:
 - `ServerException` 用于表示系统级故障（非业务语义），携带全局错误码。
 
 ### 3.3 全局异常到 HTTP 响应的映射
-
 `GlobalExceptionHandler` 对以下异常做了显式映射：
 
 | 异常类型                                                                             | 映射行为                                                                          |

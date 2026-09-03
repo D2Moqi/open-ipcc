@@ -66,7 +66,6 @@ source_files:
 - 未使用 Tailwind 或 Bootstrap，响应式断点由项目自行在 SCSS 中编写。
 
 ### 3.4 图标与资源
-
 - 图标采用 `@iconify/vue` + `@iconify/json` 组合，通过 SVG sprite 方式按需加载。
 - 静态资源按功能域分目录存放于 `src/assets/`（如 `ai/`、`cc/`、`ivr/`、`imgs/`、`svgs/`），便于呼叫中心各模块隔离。
 
