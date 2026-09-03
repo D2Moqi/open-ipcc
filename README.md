@@ -62,7 +62,7 @@ git submodule update --init --recursive
 
 - 需安装 **Multi-Project Workspace** 插件，用于同时打开前后端多类型项目，便于前后端联动开发。
 - 项目加载异常：关闭 IDEA，删除 `.idea` 目录中除 `jb-workspace.xml` 外的文件后重新打开。
-- 项目名称展示异常：核对各 git 子项目（前后端工程）分支是否正确（`yudao-cloud` 双分支并行：`master-jdk25-cc` / `master-jdk17-cc`）。
+- 项目名称展示异常：核对各 git 子项目（前后端工程）分支是否正确。
 - 前端 npm 命令不识别：确认 `package.json` 被 IDE 正确识别为 JSON（未识别时右键设置文件类型）。
 
 ---
