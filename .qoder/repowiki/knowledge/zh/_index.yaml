@@ -3,12 +3,22 @@ schema_version: 1
 locale: zh-CN
 branch: master
 nodes_managed: true
-exported_at: "2026-09-03T04:43:59Z"
+exported_at: "2026-09-05T02:35:23Z"
 modules:
     "":
-      dir_name: IPCC 智能呼叫中心（基于 yudao-cloud 二次开发）
-      title: IPCC 智能呼叫中心（基于 yudao-cloud 二次开发）
+      dir_name: 芋道多业务微服务与呼叫中心平台
+      title: 芋道多业务微服务与呼叫中心平台
       scope: [ ]
+      source_files: [ ]
+      children:
+        - record_unified_storage_evolution_doc
+      depends_on: [ ]
+      related_to: [ ]
+    record_unified_storage_evolution_doc:
+      dir_name: 录音统一存储方案(演进档)详细实现文档
+      title: 录音统一存储方案(演进档)详细实现文档
+      scope:
+        - 录音统一存储方案-演进档详细实现.md
         source_files: []
         children: []
         depends_on: []

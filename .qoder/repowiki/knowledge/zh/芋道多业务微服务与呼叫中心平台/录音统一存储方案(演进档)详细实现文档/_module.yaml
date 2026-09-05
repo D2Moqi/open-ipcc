@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: record_unified_storage_evolution_doc
+title: 录音统一存储方案(演进档)详细实现文档
+scope:
+  - 录音统一存储方案-演进档详细实现.md
+source_files: [ ]
+depends_on: [ ]
+related_to: [ ]

@@ -1,6 +1,0 @@
-[submodule "yudao-module-cc/ipcc-fs-esl"]
-	path = yudao-module-cc/ipcc-fs-esl
-	url = https://gitee.com/ipcc-ai/ipcc-fs-esl.git
-[submodule "yudao-module-cc/ipcc-sipproxy"]
-	path = yudao-module-cc/ipcc-sipproxy
-	url = https://gitee.com/ipcc-ai/ipcc-sipproxy.git

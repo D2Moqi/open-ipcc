@@ -40,9 +40,9 @@ source_files:
     - `yudao-cloud/yudao-server/src/main/resources/logback-spring.xml`：日志输出策略。
 
 - 环境标签（Env）starter
-  -
-  `yudao-framework/yudao-spring-boot-starter-env/src/main/java/cn/iocoder/yudao/framework/env/config/EnvProperties.java`：
-  `@ConfigurationProperties(prefix = "yudao.env")`，定义 `tag` 字段及常量 `TAG_KEY = "yudao.env.tag"`。
+    -
+    `yudao-framework/yudao-spring-boot-starter-env/src/main/java/cn/iocoder/yudao/framework/env/config/EnvProperties.java`：
+    `@ConfigurationProperties(prefix = "yudao.env")`，定义 `tag` 字段及常量 `TAG_KEY = "yudao.env.tag"`。
     - `.../core/context/EnvContextHolder.java`：基于 `TransmittableThreadLocal<List<String>>` 维护每线程的环境标签栈，支持嵌套
       set/remove。
     - `.../core/util/EnvUtils.java`：从 `HttpServletRequest.getHeader("tag")`、`ServiceInstance.getMetadata()`、
